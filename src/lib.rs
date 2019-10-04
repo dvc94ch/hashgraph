@@ -1,7 +1,6 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+//! Implementation of the hashgrap aBFT consensus algorithm.
+#![deny(missing_docs)]
+#![deny(warnings)]
+
+pub mod event;
+pub mod graph;
