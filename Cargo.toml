@@ -7,3 +7,4 @@ edition = "2018"
 [dependencies]
 async-std = "0.99"
 multihash = { git = "https://github.com/dvc94ch/rust-multihash", branch = "cli" }
+rand = "0.7"

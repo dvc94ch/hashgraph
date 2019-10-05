@@ -1,19 +1,22 @@
 //! Gossip graph
-use crate::event::{DerivedProperties, Event, RawEvent, RawProperties};
+use crate::event::RawProperties;
 use multihash::Multihash;
 use std::collections::HashMap;
 
-/// Hash graph.
-#[derive(Default)]
-pub struct HashGraph {
-    events: HashMap<Multihash, Event>,
-    population: u32,
+/// Gossip graph.
+pub struct Graph<TGraphEvent> {
+    events: HashMap<Multihash, TGraphEvent>,
 }
 
 // Parents and ancestors
-impl HashGraph {
+impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
+    /// Get the event.
+    pub fn get(&self, hash: &Multihash) -> Option<&TGraphEvent> {
+        self.events.get(hash)
+    }
+
     /// Set of parents of an event.
-    pub fn parents<TEvent: RawProperties>(&self, event: &TEvent) -> Vec<&Event> {
+    pub fn parents<TEvent: RawProperties>(&self, event: &TEvent) -> Vec<&TGraphEvent> {
         event
             .parent_hashes()
             .into_iter()
@@ -22,7 +25,7 @@ impl HashGraph {
     }
 
     /// Self parent of an event.
-    pub fn self_parent<TEvent: RawProperties>(&self, event: &TEvent) -> Option<&Event> {
+    pub fn self_parent<TEvent: RawProperties>(&self, event: &TEvent) -> Option<&TGraphEvent> {
         event
             .self_parent_hash()
             .map(|mh| self.events.get(mh))
@@ -30,10 +33,13 @@ impl HashGraph {
     }
 
     /// Returns an iterator of an events ancestors.
-    pub fn ancestors<'a, TEvent>(&'a self, event: &'a TEvent) -> AncestorIter<'a, TEvent>
+    pub fn ancestors<'a, TEvent>(
+        &'a self,
+        event: &'a TEvent,
+    ) -> AncestorIter<'a, TGraphEvent, TEvent>
     where
         TEvent: RawProperties,
-        &'a TEvent: From<&'a Event>,
+        &'a TEvent: From<&'a TGraphEvent>,
     {
         AncestorIter {
             graph: self,
@@ -42,10 +48,13 @@ impl HashGraph {
     }
 
     /// Returns an iterator of an events self ancestors.
-    pub fn self_ancestors<'a, TEvent>(&'a self, event: &'a TEvent) -> SelfAncestorIter<'a, TEvent>
+    pub fn self_ancestors<'a, TEvent>(
+        &'a self,
+        event: &'a TEvent,
+    ) -> SelfAncestorIter<'a, TGraphEvent, TEvent>
     where
-        TEvent: RawProperties,
-        &'a TEvent: From<&'a Event>,
+        TEvent: RawProperties + 'a,
+        &'a TEvent: From<&'a TGraphEvent>,
     {
         SelfAncestorIter {
             graph: self,
@@ -58,7 +67,7 @@ impl HashGraph {
     pub fn ancestor<'a, TEvent>(&'a self, x: &'a TEvent, y: &TEvent) -> bool
     where
         TEvent: RawProperties + 'a,
-        &'a TEvent: From<&'a Event>,
+        &'a TEvent: From<&'a TGraphEvent>,
     {
         self.ancestors(x).find(|e| e.hash() == y.hash()).is_some()
     }
@@ -68,7 +77,7 @@ impl HashGraph {
     pub fn self_ancestor<'a, TEvent>(&'a self, x: &'a TEvent, y: &TEvent) -> bool
     where
         TEvent: RawProperties + 'a,
-        &'a TEvent: From<&'a Event>,
+        &'a TEvent: From<&'a TGraphEvent>,
     {
         self.self_ancestors(x)
             .find(|e| e.hash() == y.hash())
@@ -77,15 +86,16 @@ impl HashGraph {
 }
 
 /// Iterator of ancestors.
-pub struct AncestorIter<'a, TEvent> {
-    graph: &'a HashGraph,
+pub struct AncestorIter<'a, TGraphEvent, TEvent> {
+    graph: &'a Graph<TGraphEvent>,
     stack: Vec<Box<dyn Iterator<Item = &'a TEvent> + 'a>>,
 }
 
-impl<'a, TEvent> Iterator for AncestorIter<'a, TEvent>
+impl<'a, TGraphEvent, TEvent> Iterator for AncestorIter<'a, TGraphEvent, TEvent>
 where
+    TGraphEvent: RawProperties,
     TEvent: RawProperties,
-    &'a TEvent: From<&'a Event>,
+    &'a TEvent: From<&'a TGraphEvent>,
 {
     type Item = &'a TEvent;
 
@@ -108,15 +118,16 @@ where
 }
 
 /// Iterator of self ancestors.
-pub struct SelfAncestorIter<'a, TEvent> {
-    graph: &'a HashGraph,
+pub struct SelfAncestorIter<'a, TGraphEvent, TEvent> {
+    graph: &'a Graph<TGraphEvent>,
     event: Option<&'a TEvent>,
 }
 
-impl<'a, TEvent> Iterator for SelfAncestorIter<'a, TEvent>
+impl<'a, TGraphEvent, TEvent> Iterator for SelfAncestorIter<'a, TGraphEvent, TEvent>
 where
+    TGraphEvent: RawProperties,
     TEvent: RawProperties,
-    &'a TEvent: From<&'a Event>,
+    &'a TEvent: From<&'a TGraphEvent>,
 {
     type Item = &'a TEvent;
 
@@ -133,13 +144,13 @@ where
 }
 
 // seeing
-impl HashGraph {
+impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
     /// Event x sees y if y is an ancestor of x, but no fork of y is an
     /// ancestor of x.
     pub fn see<'a, TEvent>(&'a self, x: &'a TEvent, y: &TEvent) -> bool
     where
         TEvent: RawProperties + 'a,
-        &'a TEvent: From<&'a Event>,
+        &'a TEvent: From<&'a TGraphEvent>,
     {
         let mut is_ancestor = false;
         let mut created = Vec::new();
@@ -164,14 +175,14 @@ impl HashGraph {
         true
     }
 
-    /// Event x strongly sees y if x can see events by more than 2n/3 creators,
+    /// Event x strongly sees y if x can see events by more than 2n/3 authors,
     /// each of which sees y.
-    pub fn strongly_see<'a, TEvent>(&'a self, x: &'a TEvent, y: &'a TEvent) -> bool
+    pub fn strongly_see<'a, TEvent>(&'a self, x: &'a TEvent, y: &'a TEvent, n: u32) -> bool
     where
-        TEvent: DerivedProperties + 'a,
-        &'a TEvent: From<&'a Event>,
+        TEvent: RawProperties + 'a,
+        &'a TEvent: From<&'a TGraphEvent>,
     {
-        let ay: Vec<u32> = (0..self.population)
+        let ay: Vec<u32> = (0..n)
             .into_iter()
             .map(|n| {
                 self.ancestors(y)
@@ -180,7 +191,7 @@ impl HashGraph {
                     .unwrap_or(1)
             })
             .collect();
-        let ax: Vec<u32> = (0..self.population)
+        let ax: Vec<u32> = (0..n)
             .into_iter()
             .map(|n| {
                 self.ancestors(x)
@@ -194,57 +205,21 @@ impl HashGraph {
             })
             .collect();
         let number_of_authors_see = ay.into_iter().zip(ax).filter(|(y, x)| y >= x).count();
-        let threshold = 2 * self.population as usize / 3;
-        number_of_authors_see > threshold
+        number_of_authors_see > 2 * n as usize / 3
     }
 }
 
-impl HashGraph {
-    pub fn end_of_round(&self, witnesses: Vec<Event>, raw: &RawEvent) -> bool {
-        let threshold = 2 * self.population as usize / 3;
-        let mut count = 0;
-        for witness in &witnesses {
-            if self.strongly_see(raw, witness) {
-                count += 1;
-                if count > threshold {
-                    return true;
-                }
-            }
-        }
-        false
+impl<TEvent: RawProperties> Graph<TEvent> {
+    /// Adds an event to the graph.
+    pub fn add_event(&mut self, event: TEvent) {
+        self.events.insert(event.hash().clone(), event);
     }
 
-    /// Adds a raw event to the graph.
-    ///
-    /// The maximum created round of all self parents of x (or 1 if there are none).
-    /// Event x is a witness if x has a greater created round than its self parent.
-    pub fn add_event<'a>(&'a mut self, raw: RawEvent) -> &'a Event {
-        let seq = if let Some(parent) = self.self_parent(&raw) {
-            parent.seq() + 1
-        } else {
-            1
-        };
-        let parent_round = self
-            .parents(&raw)
-            .into_iter()
-            .map(|p| p.round())
-            .max()
-            .unwrap_or(1);
-        // TODO get real witnesses for parent_round
-        let round = if self.end_of_round(vec![], &raw) {
-            parent_round + 1
-        } else {
-            parent_round
-        };
-        let witness = round > parent_round;
-        let event = Event {
-            raw,
-            seq,
-            round,
-            witness,
-        };
-        let hash = event.hash().clone();
-        self.events.insert(hash.clone(), event);
-        self.events.get(&hash).expect("just inserted; qed")
+    /// Removes an event from the graph.
+    pub fn remove_event(&mut self, event: TEvent) {
+        let ancestors: Vec<_> = self.ancestors(&event).map(|e| e.hash().clone()).collect();
+        for ancestor in ancestors {
+            self.events.remove(&ancestor);
+        }
     }
 }

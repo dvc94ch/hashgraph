@@ -30,35 +30,28 @@ pub trait RawProperties {
 
     /// Signature of the event.
     fn signature(&self) -> &Signature;
-}
 
-/// Derived properties of an event.
-pub trait DerivedProperties: RawProperties {
-    /// Sequence number of the event.
+    /// Monotonically increasing sequence number of event.
     fn seq(&self) -> u32;
-
-    /// Round of the event.
-    fn round(&self) -> u32;
-
-    /// First event of a new round.
-    fn witness(&self) -> bool;
 }
 
 /// A raw event.
 #[derive(Clone, Debug)]
 pub struct RawEvent {
     /// Arbitrary binary payload of the event.
-    payload: Box<[u8]>,
+    pub(crate) payload: Box<[u8]>,
     /// A list of hashes of the event's parents, self-parent first.
-    hashes: Vec<Multihash>,
+    pub(crate) hashes: Vec<Multihash>,
     /// Author's claimed date and time of the event.
-    time: SystemTime,
+    pub(crate) time: SystemTime,
     /// Author id of the author.
-    author: u32,
+    pub(crate) author: u32,
     /// Hash of {payload, hashes, time, author}.
-    hash: Multihash,
+    pub(crate) hash: Multihash,
     /// Author's digital signature of hash.
-    signature: Signature,
+    pub(crate) signature: Signature,
+    /// Monotonically increasing sequence number of event.
+    pub(crate) seq: u32,
 }
 
 impl RawProperties for RawEvent {
@@ -89,6 +82,19 @@ impl RawProperties for RawEvent {
     fn signature(&self) -> &Signature {
         &self.signature
     }
+
+    fn seq(&self) -> u32 {
+        self.seq
+    }
+}
+
+/// Derived properties of an event.
+pub trait DerivedProperties: RawProperties {
+    /// Round of the event.
+    fn round(&self) -> u32;
+
+    /// First event of a new round.
+    fn witness(&self) -> bool;
 }
 
 /// An event.
@@ -96,8 +102,6 @@ impl RawProperties for RawEvent {
 pub struct Event {
     /// Raw event received.
     pub(crate) raw: RawEvent,
-    /// Sequence number of the event.
-    pub(crate) seq: u32,
     /// Round of the event.
     pub(crate) round: u32,
     /// Is first event of a new round.
@@ -132,18 +136,24 @@ impl RawProperties for Event {
     fn signature(&self) -> &Signature {
         self.raw.signature()
     }
+
+    fn seq(&self) -> u32 {
+        self.raw.seq()
+    }
 }
 
 impl DerivedProperties for Event {
-    fn seq(&self) -> u32 {
-        self.seq
-    }
-
     fn round(&self) -> u32 {
         self.round
     }
 
     fn witness(&self) -> bool {
         self.witness
+    }
+}
+
+impl<'a> From<&'a Event> for &'a RawEvent {
+    fn from(event: &'a Event) -> Self {
+        &event.raw
     }
 }
