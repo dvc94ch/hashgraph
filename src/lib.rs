@@ -2,6 +2,7 @@
 #![deny(missing_docs)]
 #![deny(warnings)]
 
+pub mod author;
 pub mod event;
 pub mod graph;
 pub mod round;
