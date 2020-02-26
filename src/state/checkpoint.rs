@@ -3,8 +3,8 @@ use crate::hash::Hash;
 use core::ops::Deref;
 use std::collections::HashSet;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Checkpoint(Hash);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Checkpoint(pub(crate) Hash);
 
 impl Deref for Checkpoint {
     type Target = Hash;
@@ -16,8 +16,16 @@ impl Deref for Checkpoint {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignedCheckpoint {
-    checkpoint: Checkpoint,
-    signatures: Box<[Signature]>,
+    pub checkpoint: Checkpoint,
+    pub signatures: Box<[Signature]>,
+}
+
+impl Deref for SignedCheckpoint {
+    type Target = Hash;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.checkpoint
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,16 +44,15 @@ impl ProposedCheckpoint {
         }
     }
 
-    pub fn add_sig(&mut self, author: Author, sig: Signature) -> bool {
+    pub fn add_sig(&mut self, author: Author, sig: Signature) {
         if self.signees.contains(&author) {
-            return false;
+            return;
         }
         if author.verify(&**self.checkpoint, &sig).is_err() {
-            return false;
+            return;
         }
         self.signees.insert(author);
         self.signatures.push(sig);
-        true
     }
 
     pub fn len(&self) -> usize {

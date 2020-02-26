@@ -186,16 +186,15 @@ impl ProposedBlock {
         }
     }
 
-    pub fn add_sig(&mut self, author: Author, sig: Signature) -> bool {
+    pub fn add_sig(&mut self, author: Author, sig: Signature) {
         if self.signees.contains(&author) {
-            return false;
+            return;
         }
         if author.verify(&*self.hash, &sig).is_err() {
-            return false;
+            return;
         }
         self.signees.insert(author);
         self.signatures.push(sig);
-        true
     }
 
     pub fn len(&self) -> usize {
@@ -315,6 +314,10 @@ impl AuthorChain {
         if let Some(proposed) = &mut self.proposed {
             proposed.add_sig(author, sig);
         }
+    }
+
+    pub fn authors(&self) -> &HashSet<Author> {
+        &self.authors
     }
 }
 

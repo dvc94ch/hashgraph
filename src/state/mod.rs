@@ -6,8 +6,10 @@ mod tree;
 
 use self::acl::Acl;
 use self::chain::AuthorChain;
+use self::checkpoint::ProposedCheckpoint;
 use self::serde::{Exporter, Importer};
 pub use self::tree::Tree;
+pub use self::checkpoint::{Checkpoint, SignedCheckpoint};
 use crate::author::{Author, Signature};
 use crate::error::StateError;
 use crate::hash::{FileHasher, Hash};
@@ -22,12 +24,15 @@ pub enum Op {
     Insert(Box<[u8]>, Box<[u8]>),
     Remove(Box<[u8]>),
     CompareAndSwap(Box<[u8]>, Option<Box<[u8]>>, Option<Box<[u8]>>),
+    SignCheckpoint(Signature),
 }
 
 pub struct State {
     _db: sled::Db,
     authors: AuthorChain,
     state: Acl,
+    checkpoint: Option<SignedCheckpoint>,
+    proposed: Option<ProposedCheckpoint>,
 }
 
 impl State {
@@ -35,7 +40,7 @@ impl State {
         let db = sled::open(path.join("sled"))?;
         let authors = AuthorChain::from_tree(db.open_tree("authors")?)?;
         let state = Acl::from_tree(db.open_tree("state")?);
-        Ok(Self { _db: db, authors, state })
+        Ok(Self { _db: db, authors, state, checkpoint: None, proposed: None })
     }
 
     pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), StateError> {
@@ -65,6 +70,7 @@ impl State {
                     new.as_ref().map(|b| &**b),
                 )?;
             }
+            Op::SignCheckpoint(signature) => self.sign_checkpoint(author, *signature),
         }
         Ok(())
     }
@@ -77,7 +83,7 @@ impl State {
         self.authors.hash()
     }
 
-    pub async fn export_checkpoint(&mut self, dir: &Path) -> Result<Hash, StateError> {
+    pub async fn export_checkpoint(&mut self, dir: &Path) -> Result<Checkpoint, StateError> {
         let mut fh = FileHasher::create_tmp(&dir).await?;
         Exporter::new(&self.authors.tree, &mut fh)
             .write_tree()
@@ -85,23 +91,79 @@ impl State {
         Exporter::new(&self.state.tree, &mut fh)
             .write_tree()
             .await?;
-        Ok(fh.rename(&dir).await?)
+        let checkpoint = Checkpoint(fh.rename(&dir).await?);
+        self.proposed = Some(ProposedCheckpoint::new(checkpoint));
+        Ok(checkpoint)
     }
 
-    pub async fn import_checkpoint(&mut self, dir: &Path, hash: &Hash) -> Result<(), StateError> {
+    pub async fn import_checkpoint(
+        &mut self,
+        dir: &Path,
+        checkpoint: SignedCheckpoint,
+    ) -> Result<(), StateError> {
+        let genesis = self.genesis_hash().ok();
+
         self.authors.tree.clear()?;
         self.state.tree.clear()?;
-        let mut fh = FileHasher::open_with_hash(dir, hash).await?;
+        let mut fh = FileHasher::open_with_hash(dir, &*checkpoint).await?;
         Importer::new(&self.authors.tree, &mut fh)
             .read_tree()
             .await?;
         Importer::new(&self.state.tree, &mut fh).read_tree().await?;
-        if fh.hash() != *hash {
+        if fh.hash() != *checkpoint {
             self.authors.tree.clear()?;
             self.state.tree.clear()?;
             return Err(StateError::InvalidCheckpoint);
         }
+
+        // make sure that it's still the same chain by comparing the new genesis hash.
+        let new_authors = AuthorChain::from_tree(self.authors.tree.clone())?;
+        if let Some(genesis) = genesis {
+            let new_genesis = new_authors.genesis_hash()?;
+            if genesis != new_genesis {
+                return Err(StateError::InvalidCheckpoint);
+            }
+        }
+
+        // check the signatures
+        let population = new_authors.authors().len();
+        let threshold = population - population * 2 / 3;
+        let mut signees = HashSet::new();
+        for sig in &checkpoint.signatures[..] {
+            for author in new_authors.authors().iter() {
+                if signees.contains(author) {
+                    continue;
+                }
+                if author.verify(&**checkpoint, sig).is_err() {
+                    continue;
+                }
+                signees.insert(*author);
+            }
+        }
+        if signees.len() < threshold {
+            return Err(StateError::InvalidCheckpoint);
+        }
+
+        self.authors = new_authors;
+        self.checkpoint = Some(checkpoint);
         Ok(())
+    }
+
+    pub fn checkpoint(&self) -> Option<&SignedCheckpoint> {
+        self.checkpoint.as_ref()
+    }
+
+    fn sign_checkpoint(&mut self, author: Author, sig: Signature) {
+        if let Some(mut proposed) = self.proposed.take() {
+            proposed.add_sig(author, sig);
+            let population = self.authors.authors().len();
+            let threshold = population - population * 2 / 3;
+            if proposed.len() >= threshold {
+                self.checkpoint = Some(proposed.into_signed_checkpoint());
+            } else {
+                self.proposed = Some(proposed);
+            }
+        }
     }
 }
 
@@ -166,9 +228,15 @@ mod tests {
         async_std::fs::create_dir_all(&dir).await.unwrap();
         state.commit(ids[0].author(), &Op::Insert(bx(b"key"), bx(b"value"))).unwrap();
 
-        let hash = state.export_checkpoint(&dir).await.unwrap();
-        state.import_checkpoint(&dir, &hash).await.unwrap();
-        let hash2 = state.export_checkpoint(&dir).await.unwrap();
-        assert_eq!(hash, hash2);
+        let checkpoint = state.export_checkpoint(&dir).await.unwrap();
+
+        let signed = SignedCheckpoint {
+            checkpoint,
+            signatures: vec![ids[0].sign(&**checkpoint)].into_boxed_slice(),
+        };
+        state.import_checkpoint(&dir, signed).await.unwrap();
+
+        let checkpoint2 = state.export_checkpoint(&dir).await.unwrap();
+        assert_eq!(checkpoint, checkpoint2);
     }
 }
