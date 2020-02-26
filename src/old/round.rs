@@ -1,5 +1,5 @@
 //! Implements voting and round handling.
-use crate::event::{DerivedProperties, Event, RawEvent};
+use crate::event::Event;
 use crate::graph::Graph;
 
 /// Rounds are a group events to be voted on.
@@ -127,7 +127,7 @@ impl<'a> Voter<'a> {
 
     /// The maximum created round of all self parents of x (or 1 if there are none).
     /// Event x is a witness if x has a greater created round than its self parent.
-    pub fn add_event(&mut self, raw: RawEvent) {
+    pub fn add_event(&mut self, raw: Event) {
         let parent_round = self
             .graph
             .parents(&raw)

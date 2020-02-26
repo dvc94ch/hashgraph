@@ -1,22 +1,23 @@
 //! Gossip graph
-use crate::event::RawProperties;
-use multihash::Multihash;
+use crate::event::Event;
+use crate::hash::Hash;
 use std::collections::HashMap;
 
 /// Gossip graph.
-pub struct Graph<TGraphEvent> {
-    events: HashMap<Multihash, TGraphEvent>,
+#[derive(Debug, Default)]
+pub struct Graph {
+    events: HashMap<Hash, Event>,
 }
 
 // Parents and ancestors
-impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
+impl Graph {
     /// Get the event.
-    pub fn get(&self, hash: &Multihash) -> Option<&TGraphEvent> {
+    pub fn get(&self, hash: &Hash) -> Option<&Event> {
         self.events.get(hash)
     }
 
     /// Set of parents of an event.
-    pub fn parents<TEvent: RawProperties>(&self, event: &TEvent) -> Vec<&TGraphEvent> {
+    pub fn parents(&self, event: &Event) -> Vec<&Event> {
         event
             .parent_hashes()
             .into_iter()
@@ -25,7 +26,7 @@ impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
     }
 
     /// Self parent of an event.
-    pub fn self_parent<TEvent: RawProperties>(&self, event: &TEvent) -> Option<&TGraphEvent> {
+    pub fn self_parent(&self, event: &Event) -> Option<&Event> {
         event
             .self_parent_hash()
             .map(|mh| self.events.get(mh))
@@ -33,14 +34,7 @@ impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
     }
 
     /// Returns an iterator of an events ancestors.
-    pub fn ancestors<'a, TEvent>(
-        &'a self,
-        event: &'a TEvent,
-    ) -> AncestorIter<'a, TGraphEvent, TEvent>
-    where
-        TEvent: RawProperties,
-        &'a TEvent: From<&'a TGraphEvent>,
-    {
+    pub fn ancestors<'a>(&'a self, event: &'a Event) -> AncestorIter<'a> {
         AncestorIter {
             graph: self,
             stack: vec![Box::new(vec![event].into_iter())],
@@ -48,14 +42,7 @@ impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
     }
 
     /// Returns an iterator of an events self ancestors.
-    pub fn self_ancestors<'a, TEvent>(
-        &'a self,
-        event: &'a TEvent,
-    ) -> SelfAncestorIter<'a, TGraphEvent, TEvent>
-    where
-        TEvent: RawProperties + 'a,
-        &'a TEvent: From<&'a TGraphEvent>,
-    {
+    pub fn self_ancestors<'a>(&'a self, event: &'a Event) -> SelfAncestorIter<'a> {
         SelfAncestorIter {
             graph: self,
             event: Some(event),
@@ -64,21 +51,13 @@ impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
 
     /// Event x is an ancestor of y if x can reach y by following 0 or more
     /// parent edges.
-    pub fn ancestor<'a, TEvent>(&'a self, x: &'a TEvent, y: &TEvent) -> bool
-    where
-        TEvent: RawProperties + 'a,
-        &'a TEvent: From<&'a TGraphEvent>,
-    {
+    pub fn ancestor<'a>(&'a self, x: &'a Event, y: &Event) -> bool {
         self.ancestors(x).find(|e| e.hash() == y.hash()).is_some()
     }
 
     /// Event x is a self_ancestor of y if x can reach y by following 0 or more
     /// self_parent edges.
-    pub fn self_ancestor<'a, TEvent>(&'a self, x: &'a TEvent, y: &TEvent) -> bool
-    where
-        TEvent: RawProperties + 'a,
-        &'a TEvent: From<&'a TGraphEvent>,
-    {
+    pub fn self_ancestor<'a>(&'a self, x: &'a Event, y: &Event) -> bool {
         self.self_ancestors(x)
             .find(|e| e.hash() == y.hash())
             .is_some()
@@ -86,18 +65,13 @@ impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
 }
 
 /// Iterator of ancestors.
-pub struct AncestorIter<'a, TGraphEvent, TEvent> {
-    graph: &'a Graph<TGraphEvent>,
-    stack: Vec<Box<dyn Iterator<Item = &'a TEvent> + 'a>>,
+pub struct AncestorIter<'a> {
+    graph: &'a Graph,
+    stack: Vec<Box<dyn Iterator<Item = &'a Event> + 'a>>,
 }
 
-impl<'a, TGraphEvent, TEvent> Iterator for AncestorIter<'a, TGraphEvent, TEvent>
-where
-    TGraphEvent: RawProperties,
-    TEvent: RawProperties,
-    &'a TEvent: From<&'a TGraphEvent>,
-{
-    type Item = &'a TEvent;
+impl<'a> Iterator for AncestorIter<'a> {
+    type Item = &'a Event;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -118,18 +92,13 @@ where
 }
 
 /// Iterator of self ancestors.
-pub struct SelfAncestorIter<'a, TGraphEvent, TEvent> {
-    graph: &'a Graph<TGraphEvent>,
-    event: Option<&'a TEvent>,
+pub struct SelfAncestorIter<'a> {
+    graph: &'a Graph,
+    event: Option<&'a Event>,
 }
 
-impl<'a, TGraphEvent, TEvent> Iterator for SelfAncestorIter<'a, TGraphEvent, TEvent>
-where
-    TGraphEvent: RawProperties,
-    TEvent: RawProperties,
-    &'a TEvent: From<&'a TGraphEvent>,
-{
-    type Item = &'a TEvent;
+impl<'a> Iterator for SelfAncestorIter<'a> {
+    type Item = &'a Event;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_event = if let Some(event) = self.event.as_ref() {
@@ -144,14 +113,10 @@ where
 }
 
 // seeing
-impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
+impl Graph {
     /// Event x sees y if y is an ancestor of x, but no fork of y is an
     /// ancestor of x.
-    pub fn see<'a, TEvent>(&'a self, x: &'a TEvent, y: &TEvent) -> bool
-    where
-        TEvent: RawProperties + 'a,
-        &'a TEvent: From<&'a TGraphEvent>,
-    {
+    pub fn see(&self, x: &Event, y: &Event) -> bool {
         let mut is_ancestor = false;
         let mut created = Vec::new();
         for ancestor in self.ancestors(x) {
@@ -177,11 +142,7 @@ impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
 
     /// Event x strongly sees y if x can see events by more than 2n/3 authors,
     /// each of which sees y.
-    pub fn strongly_see<'a, TEvent>(&'a self, x: &'a TEvent, y: &'a TEvent, n: u32) -> bool
-    where
-        TEvent: RawProperties + 'a,
-        &'a TEvent: From<&'a TGraphEvent>,
-    {
+    pub fn strongly_see(&self, x: &Event, y: &Event, n: u32) -> bool {
         let ay: Vec<u32> = (0..n)
             .into_iter()
             .map(|n| {
@@ -209,14 +170,20 @@ impl<TGraphEvent: RawProperties> Graph<TGraphEvent> {
     }
 }
 
-impl<TEvent: RawProperties> Graph<TEvent> {
+impl Graph {
+    pub fn new() -> Self {
+        Self {
+            events: Default::default(),
+        }
+    }
+
     /// Adds an event to the graph.
-    pub fn add_event(&mut self, event: TEvent) {
+    pub fn add_event(&mut self, event: Event) {
         self.events.insert(event.hash().clone(), event);
     }
 
     /// Removes an event from the graph.
-    pub fn remove_event(&mut self, event: TEvent) {
+    pub fn remove_event(&mut self, event: Event) {
         let ancestors: Vec<_> = self.ancestors(&event).map(|e| e.hash().clone()).collect();
         for ancestor in ancestors {
             self.events.remove(&ancestor);

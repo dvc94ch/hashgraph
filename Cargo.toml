@@ -5,6 +5,16 @@ authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 
 [dependencies]
-async-std = "0.99"
-multihash = { git = "https://github.com/dvc94ch/rust-multihash", branch = "cli" }
-rand = "0.7"
+async-std = { version = "1.5.0", features = ["attributes"] }
+bincode = "1.2.1"
+data-encoding = "2.2.0"
+dirs = "2.0.2"
+disco = "0.1.0"
+libp2p-core = "0.16.0"
+rand = "0.7.3"
+serde = { version = "1.0.104", features = ["derive"] }
+sled = "0.31.0"
+thiserror = "1.0.11"
+
+[dev-dependencies]
+tempdir = "0.3.7"

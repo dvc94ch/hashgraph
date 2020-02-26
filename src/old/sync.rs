@@ -1,5 +1,5 @@
 //! Syncing between peers.
-use crate::event::{RawEvent, RawProperties};
+use crate::event::{Event, Payload};
 use crate::graph::Graph;
 
 /// State of gossip graph.
@@ -23,13 +23,14 @@ impl SyncState {
 }
 
 /// Syncs the gossip graph with other nodes.
-pub struct Syncer<TEvent> {
-    graph: Graph<TEvent>,
+pub struct Syncer {
+    tx_queue: Vec<Payload>,
 }
 
-impl<TEvent: RawProperties> Syncer<TEvent> {
+impl Syncer {
+    pub fn create_transaction(&mut self,
     /// Import an event received in a sync.
-    pub fn import_event(&self, raw: RawEvent) {
+    pub fn import_event(&self, raw: Event) {
         if !raw
             .parent_hashes()
             .iter()
