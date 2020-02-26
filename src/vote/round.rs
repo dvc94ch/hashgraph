@@ -40,7 +40,7 @@ impl<'a> Round<'a> {
 /// Voter splits events into rounds and orders them into a globally agreed
 /// consensus order.
 pub struct Voter<'a> {
-    graph: Graph<Event>,
+    graph: Graph,
     rounds: Vec<Round<'a>>,
     history: Vec<Round<'a>>,
 }

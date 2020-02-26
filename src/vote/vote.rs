@@ -122,7 +122,7 @@ pub struct Event {
 
     pub async fn receive_sync(&self) -> Vec<RawEvent> {
         // receive a sync
-        // 
+        //
     }
 
     pub fn divide_rounds(&self, raw: &RawEvent) -> Event {
@@ -144,7 +144,7 @@ pub struct Event {
             other_parent,
         }
     }
-    
+
     pub async fn run(self: Arc<Self>) {
         task::spawn(async {
             loop {
@@ -165,7 +165,7 @@ pub struct Event {
             }
         });
     }
-}*/
+}
 
     pub async fn receive_sync(&self, state: State) -> RawEvent {
         // receive raw event from peer
@@ -197,3 +197,4 @@ pub struct Event {
             }
         });
     }
+*/

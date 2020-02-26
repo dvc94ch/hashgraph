@@ -8,3 +8,4 @@ pub mod event;
 pub mod graph;
 pub mod hash;
 pub mod state;
+pub mod vote;
