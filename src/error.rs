@@ -25,8 +25,10 @@ pub enum StateError {
     Hash(#[from] HashError),
     #[error("{0}")]
     Io(#[from] io::Error),
-    #[error("{0}")]
-    Bincode(#[from] bincode::Error),
+    #[error("Invalid state")]
+    InvalidState,
+    #[error("Invalid block")]
+    InvalidBlock,
 }
 
 #[derive(Debug, Error)]
