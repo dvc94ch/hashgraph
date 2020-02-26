@@ -137,7 +137,10 @@ pub struct BlockBuilder {
 
 impl BlockBuilder {
     pub fn new(parent: Hash) -> Self {
-        Self { parent, authors: Default::default() }
+        Self {
+            parent,
+            authors: Default::default(),
+        }
     }
 
     pub fn genesis(authors: HashSet<Author>) -> Self {
@@ -209,10 +212,10 @@ impl ProposedBlock {
 }
 
 pub struct AuthorChain {
+    pub(crate) tree: sled::Tree,
     authors: HashSet<Author>,
     builder: BlockBuilder,
     proposed: Option<ProposedBlock>,
-    tree: sled::Tree,
     block: u64,
 }
 
@@ -234,7 +237,7 @@ impl AuthorChain {
                     return Err(StateError::InvalidState);
                 };
             } else {
-                break
+                break;
             }
         }
         Ok(Self {
@@ -308,13 +311,9 @@ impl AuthorChain {
         }
     }
 
-    pub fn add_sig(&mut self, sig: Signature) {
+    pub fn sign_block(&mut self, author: Author, sig: Signature) {
         if let Some(proposed) = &mut self.proposed {
-            for author in &self.authors {
-                if proposed.add_sig(*author, sig) {
-                    break;
-                }
-            }
+            proposed.add_sig(author, sig);
         }
     }
 }
@@ -370,7 +369,7 @@ mod tests {
         chain.add_author(Identity::generate().author(), 2);
         let authors = chain.start_round().unwrap();
         assert_eq!(authors.len(), 3);
-        chain.add_sig(id1.sign(&*chain.hash().unwrap()));
+        chain.sign_block(id1.author(), id1.sign(&*chain.hash().unwrap()));
         let authors = chain.start_round().unwrap();
         assert_eq!(authors.len(), 4);
         let genesis = chain.genesis_hash().unwrap();
