@@ -1,27 +1,26 @@
 use crate::author::Author;
+use crate::chain::AuthorChain;
 use crate::error::StateError;
 use crate::state::State;
 use async_std::path::Path;
+use std::collections::HashSet;
 
 pub struct Db {
     db: sled::Db,
-    authors: sled::Tree,
+    authors: AuthorChain,
     state: State,
 }
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self, StateError> {
         let db = sled::open(path.join("sled"))?;
-        let authors = db.open_tree("authors")?;
+        let authors = AuthorChain::from_tree(db.open_tree("authors")?)?;
         let state = State::from_tree(db.open_tree("state")?);
         Ok(Self { db, authors, state })
     }
 
-    pub fn authors(&self) -> Result<Vec<Author>, StateError> {
-        self.authors
-            .iter()
-            .map(|res| Ok(Author::from_bytes(&res?.0)?))
-            .collect()
+    pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), StateError> {
+        self.authors.genesis(genesis_authors)
     }
 }
 

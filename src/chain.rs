@@ -217,25 +217,6 @@ pub struct AuthorChain {
 }
 
 impl AuthorChain {
-    pub fn genesis(
-        tree: sled::Tree,
-        genesis_authors: HashSet<Author>,
-    ) -> Result<Self, StateError> {
-        let mut builder = BlockBuilder::genesis(genesis_authors.clone());
-        let proposed = builder.to_proposed();
-        let (hash, block) = proposed.into_signed_block();
-        tree.clear()?;
-        tree.insert(&*hash, block.serialize())?;
-        tree.insert(lookup(&GENESIS_HASH), &*hash)?;
-        Ok(Self {
-            authors: genesis_authors,
-            builder: builder,
-            proposed: None,
-            tree,
-            block: 1,
-        })
-    }
-
     pub fn from_tree(tree: sled::Tree) -> Result<Self, StateError> {
         let mut lookup_hash = GENESIS_HASH;
         let mut block_id = 0;
@@ -256,9 +237,6 @@ impl AuthorChain {
                 break
             }
         }
-        if authors.is_empty() {
-            return Err(StateError::InvalidState);
-        }
         Ok(Self {
             authors,
             builder: BlockBuilder::new(lookup_hash),
@@ -266,6 +244,18 @@ impl AuthorChain {
             tree,
             block: block_id,
         })
+    }
+
+    pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), StateError> {
+        self.builder = BlockBuilder::genesis(genesis_authors.clone());
+        let proposed = self.builder.to_proposed();
+        let (hash, block) = proposed.into_signed_block();
+        self.tree.clear()?;
+        self.tree.insert(&*hash, block.serialize())?;
+        self.tree.insert(lookup(&GENESIS_HASH), &*hash)?;
+        self.authors = genesis_authors;
+        self.block = 1;
+        Ok(())
     }
 
     pub fn start_round(&mut self) -> Result<Box<[Author]>, StateError> {
@@ -374,7 +364,8 @@ mod tests {
         authors.insert(id1.author());
         authors.insert(id2.author());
         authors.insert(id3.author());
-        let mut chain = AuthorChain::genesis(tree.clone(), authors).unwrap();
+        let mut chain = AuthorChain::from_tree(tree.clone()).unwrap();
+        chain.genesis(authors).unwrap();
         chain.add_author(Identity::generate().author(), 1);
         chain.add_author(Identity::generate().author(), 2);
         let authors = chain.start_round().unwrap();
