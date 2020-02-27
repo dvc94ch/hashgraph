@@ -1,7 +1,7 @@
 //! Defines an event and it's properties.
 use crate::author::{Author, Identity, Signature};
 use crate::error::Error;
-use crate::hash::{GENESIS_HASH, Hash, Hasher};
+use crate::hash::{Hash, Hasher, GENESIS_HASH};
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,20 +26,29 @@ impl<T: Serialize> UnsignedRawEvent<T> {
         hasher.write(&*self.self_hash.unwrap_or(GENESIS_HASH));
         hasher.write(&*self.other_hash.unwrap_or(GENESIS_HASH));
         hasher.write(self.author.as_bytes());
-        hasher.write(&self.time.duration_since(UNIX_EPOCH)?.as_nanos().to_be_bytes());
+        hasher.write(
+            &self
+                .time
+                .duration_since(UNIX_EPOCH)?
+                .as_nanos()
+                .to_be_bytes(),
+        );
         for p in &self.payload[..] {
             hasher.write(&bincode::serialize(p)?);
         }
         Ok(hasher.sum())
     }
 
-    pub fn sign(self, identity: &Identity) -> Result<RawEvent<T>, Error> {
+    pub fn sign(self, identity: &Identity) -> Result<(Hash, RawEvent<T>), Error> {
         let hash = self.hash()?;
         let signature = identity.sign(&*hash);
-        Ok(RawEvent {
-            event: self,
-            signature,
-        })
+        Ok((
+            hash,
+            RawEvent {
+                event: self,
+                signature,
+            },
+        ))
     }
 }
 
@@ -56,7 +65,7 @@ pub struct RawEvent<T> {
 #[derive(Clone, Debug)]
 pub struct Event<T> {
     /// Raw event
-    raw: RawEvent<T>,
+    pub(crate) raw: RawEvent<T>,
     /// Hash of {payload, hashes, time, author}.
     hash: Hash,
     /// Monotonically increasing sequence number of event.

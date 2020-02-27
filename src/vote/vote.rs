@@ -2,8 +2,8 @@
 use crate::author::Author;
 use crate::error::Error;
 use crate::event::RawEvent;
-use crate::hash::Hash;
 use crate::graph::Graph;
+use crate::hash::Hash;
 use serde::Serialize;
 
 const FREQ_COIN_ROUNDS: usize = 10;
@@ -66,7 +66,7 @@ impl Round {
 /// Voter splits events into rounds and orders them into a globally agreed
 /// consensus order.
 pub struct Voter<T> {
-    graph: Graph<T>,
+    pub(crate) graph: Graph<T>,
     rounds: Vec<Round>,
 }
 
@@ -152,6 +152,14 @@ impl<T> Voter<T> {
             }
         }*/
     }
+
+    pub fn round(&self, round: u64) -> Option<&Round> {
+        self.rounds.iter().find(|r| r.round == round)
+    }
+
+    pub fn round_mut(&mut self, round: u64) -> Option<&mut Round> {
+        self.rounds.iter_mut().find(|r| r.round == round)
+    }
 }
 
 impl<T: Serialize> Voter<T> {
@@ -161,41 +169,49 @@ impl<T: Serialize> Voter<T> {
         &mut self,
         event: RawEvent<T>,
         start_round: F,
-    ) -> Result<(), Error> {
+    ) -> Result<Hash, Error> {
         let hash = self.graph.add_event(event)?;
-        let parent_round = self
+
+        let parent_round_num = self
             .graph
             .parents(self.graph.event(&hash).unwrap())
             .into_iter()
             .filter_map(|p| p.round_created())
             .max()
-            .unwrap_or(1);
-        let round = &self.rounds[parent_round as usize];
-        let majority = round
-            .witnesses()
-            .into_iter()
-            .filter(|w| {
-                self.graph
-                    .strongly_see(&hash, w, round.authors())
-            })
-            .nth(round.threshold() as usize)
-            .is_some();
-        let round = if majority {
-            parent_round + 1
-        } else {
-            parent_round
-        };
-        let witness = round > parent_round;
-        let mut event = self.graph.event_mut(&hash).unwrap();
-        event.round_created = Some(round);
-        event.witness = Some(witness);
+            .unwrap_or(0);
+        let parent_round = self.round(parent_round_num);
 
-        if self.rounds.last().map(|r| r.round < round).unwrap_or(true) {
-            let authors = start_round()?;
-            self.rounds.push(Round::new(round, authors));
+        let is_witness = if let Some(parent_round) = parent_round {
+            parent_round
+                .witnesses()
+                .into_iter()
+                .filter(|w| self.graph.strongly_see(&hash, w, parent_round.authors()))
+                .nth(parent_round.threshold())
+                .is_some()
+        } else {
+            true
+        };
+
+        let round_num = if is_witness {
+            parent_round_num + 1
+        } else {
+            parent_round_num
+        };
+        if is_witness {
+            if let Some(round) = self.round_mut(round_num) {
+                round.witnesses.push(hash);
+            } else {
+                let mut round = Round::new(round_num, start_round()?);
+                round.witnesses.push(hash);
+                self.rounds.push(round);
+            }
         }
-        self.rounds.last_mut().unwrap().witnesses.push(hash);
+
+        let mut event = self.graph.event_mut(&hash).unwrap();
+        event.round_created = Some(round_num);
+        event.witness = Some(round_num > parent_round_num);
+
         self.process_rounds();
-        Ok(())
+        Ok(hash)
     }
 }

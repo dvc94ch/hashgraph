@@ -7,17 +7,17 @@ mod tree;
 use self::acl::Acl;
 use self::chain::AuthorChain;
 use self::checkpoint::ProposedCheckpoint;
+pub use self::checkpoint::{Checkpoint, SignedCheckpoint};
 use self::serde::{Exporter, Importer};
 pub use self::tree::Tree;
-pub use self::checkpoint::{Checkpoint, SignedCheckpoint};
 use crate::author::{Author, Signature};
 use crate::error::Error;
 use crate::hash::{FileHasher, Hash};
-use async_std::path::Path;
 use ::serde::{Deserialize, Serialize};
+use async_std::path::Path;
 use std::collections::HashSet;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Transaction {
     AddAuthor(Box<[u8]>, u64),
     RemAuthor(Box<[u8]>, u64),
@@ -42,7 +42,10 @@ impl Transaction {
     }
 
     pub fn insert(key: &[u8], value: &[u8]) -> Self {
-        Self::Insert(key.to_vec().into_boxed_slice(), value.to_vec().into_boxed_slice())
+        Self::Insert(
+            key.to_vec().into_boxed_slice(),
+            value.to_vec().into_boxed_slice(),
+        )
     }
 
     pub fn remove(key: &[u8]) -> Self {
@@ -75,7 +78,13 @@ impl State {
         let db = sled::open(path.join("sled"))?;
         let authors = AuthorChain::from_tree(db.open_tree("authors")?)?;
         let state = Acl::from_tree(db.open_tree("state")?);
-        Ok(Self { _db: db, authors, state, checkpoint: None, proposed: None })
+        Ok(Self {
+            _db: db,
+            authors,
+            state,
+            checkpoint: None,
+            proposed: None,
+        })
     }
 
     pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), Error> {
@@ -246,13 +255,25 @@ mod tests {
 
         let authors = state.start_round().unwrap();
         assert_eq!(authors.len(), 2);
-        state.commit(ids[0].author(), &Transaction::add_author(ids[2].author(), 1)).unwrap();
-        state.commit(ids[0].author(), &Transaction::rem_author(ids[0].author(), 1)).unwrap();
+        state
+            .commit(
+                ids[0].author(),
+                &Transaction::add_author(ids[2].author(), 1),
+            )
+            .unwrap();
+        state
+            .commit(
+                ids[0].author(),
+                &Transaction::rem_author(ids[0].author(), 1),
+            )
+            .unwrap();
 
         let authors2 = state.start_round().unwrap();
         assert_eq!(authors, authors2);
         let sig = ids[0].sign(&*state.block_hash().unwrap());
-        state.commit(ids[0].author(), &Transaction::sign_block(&sig)).unwrap();
+        state
+            .commit(ids[0].author(), &Transaction::sign_block(&sig))
+            .unwrap();
 
         let authors3 = state.start_round().unwrap();
         assert_eq!(authors3.len(), 2);
@@ -269,7 +290,9 @@ mod tests {
 
         let dir = path.join("checkpoint");
         async_std::fs::create_dir_all(&dir).await.unwrap();
-        state.commit(ids[0].author(), &Transaction::insert(b"key", b"value")).unwrap();
+        state
+            .commit(ids[0].author(), &Transaction::insert(b"key", b"value"))
+            .unwrap();
 
         let checkpoint = state.export_checkpoint(&dir).await.unwrap();
 
