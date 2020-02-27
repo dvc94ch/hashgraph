@@ -112,26 +112,74 @@ mod tests {
     use super::*;
     use tempdir::TempDir;
 
-    #[async_std::test]
-    async fn consensus() -> Result<(), Error> {
-        let tmp1 = TempDir::new("hashgraph1")?;
-        let mut g1 = HashGraph::open(tmp1.path().into()).await?;
-        let tmp2 = TempDir::new("hashgraph2")?;
-        let mut g2 = HashGraph::open(tmp2.path().into()).await?;
+    async fn create_graphs(n: usize) -> Result<(Vec<TempDir>, Vec<HashGraph>), Error> {
+        let mut tmp = Vec::with_capacity(n);
+        let mut g = Vec::with_capacity(n);
         let mut authors = HashSet::new();
-        authors.insert(g1.identity());
-        authors.insert(g2.identity());
-        g1.genesis(authors.clone())?;
-        g2.genesis(authors)?;
+        for i in 0..n {
+            tmp.push(TempDir::new(&format!("hashgraph{}", n))?);
+            g.push(HashGraph::open(tmp[i].path().into()).await?);
+            authors.insert(g[i].identity());
+        }
+        for i in 0..n {
+            g[i].genesis(authors.clone())?;
+        }
+        Ok((tmp, g))
+    }
 
-        g1.create_transaction(Transaction::insert(b"hello", b"world"));
-        let event = g1.create_event()?.clone();
-        g2.add_event(event)?;
+    fn link(
+        g: &mut HashGraph,
+        event: &RawEvent<Transaction>,
+    ) -> RawEvent<Transaction> {
+        if let Err(err) = g.add_event(event.clone()) {
+            println!("{:#?}", g.voter.graph);
+            println!("{:#?}", event);
+            panic!("{}", err);
+        }
+        g.create_event().unwrap().clone()
+    }
 
-        g2.create_transaction(Transaction::insert(b"world", b"hello"));
-        let event = g2.create_event()?.clone();
-        g1.add_event(event)?;
+    #[allow(unused_variables)]
+    #[async_std::test]
+    async fn consensus() {
+        let (_tmp, mut g) = create_graphs(4).await.unwrap();
 
-        Ok(())
+        let a1 = g[0].create_event().unwrap().clone();
+        let b1 = g[1].create_event().unwrap().clone();
+        let c1 = g[2].create_event().unwrap().clone();
+        let d1 = g[3].create_event().unwrap().clone();
+
+        let d11 = link(&mut g[3], &b1);
+        let b11 = link(&mut g[1], &d11);
+        let a11 = link(&mut g[0], &b11);
+        let b12 = link(&mut g[1], &c1);
+        let d12 = link(&mut g[3], &b11);
+        let d13 = link(&mut g[3], &b12);
+        let b13 = link(&mut g[1], &d13);
+        let c11 = link(&mut g[2], &b12);
+
+        let d2 = link(&mut g[3], &a11);
+        let a2 = link(&mut g[0], &d2);
+        let a21 = link(&mut g[0], &c11);
+        let b2 = link(&mut g[1], &d2);
+        let c2 = link(&mut g[2], &a21);
+        let a22 = link(&mut g[0], &b2);
+        let d21 = link(&mut g[3], &b2);
+        let d22 = link(&mut g[3], &a22);
+        let b21 = link(&mut g[1], &a22);
+
+        let b3 = link(&mut g[1], &d22);
+        let a3 = link(&mut g[0], &b3);
+        let b31 = link(&mut g[1], &a3);
+        let b32 = link(&mut g[1], &a3);
+        let d3 = link(&mut g[3], &b3);
+        let d31 = link(&mut g[3], &c2);
+        let b33 = link(&mut g[1], &d31);
+        let a31 = link(&mut g[0], &b32);
+        let a32 = link(&mut g[0], &b33);
+        let b34 = link(&mut g[1], &a32);
+        let c3 = link(&mut g[2], &d31);
+        let d32 = link(&mut g[3], &b33);
+        let d4 = link(&mut g[3], &c3);
     }
 }

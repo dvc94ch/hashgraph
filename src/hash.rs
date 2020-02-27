@@ -12,8 +12,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const HASH_LENGTH: usize = 32;
 pub const GENESIS_HASH: Hash = Hash([0u8; 32]);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct Hash([u8; HASH_LENGTH]);
+
+impl core::fmt::Debug for Hash {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "{}", BASE32.encode(&self.0))
+    }
+}
 
 impl Deref for Hash {
     type Target = [u8; HASH_LENGTH];

@@ -6,14 +6,21 @@ use async_std::{fs, prelude::*};
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
 use core::ops::Deref;
+use data_encoding::BASE32;
 pub use disco::ed25519::Signature;
 use disco::ed25519::{Keypair, PublicKey, SignatureError};
 use rand::rngs::OsRng;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Author(PublicKey);
+
+impl core::fmt::Debug for Author {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "{}", BASE32.encode(self.as_bytes()))
+    }
+}
 
 impl Deref for Author {
     type Target = PublicKey;
