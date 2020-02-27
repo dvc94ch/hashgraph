@@ -199,16 +199,16 @@ impl<T> Graph<T> {
 impl<T: Serialize> Graph<T> {
     /// Adds an event to the graph.
     pub fn add_event(&mut self, event: RawEvent<T>) -> Result<Hash, Error> {
-        let seq = if let Some(parent) = &event.self_hash {
+        let seq = if let Some(parent) = &event.event.self_hash {
             self.events.get(parent).ok_or(Error::InvalidEvent)?.seq() + 1
         } else {
             1
         };
-        if let Some(parent) = &event.other_hash {
+        if let Some(parent) = &event.event.other_hash {
             self.events.get(parent).ok_or(Error::InvalidEvent)?;
         }
-        let hash = event.hash()?;
-        event.author.verify(&*hash, &event.signature)?;
+        let hash = event.event.hash()?;
+        event.event.author.verify(&*hash, &event.signature)?;
         let event = Event::new(event, hash, seq);
         self.events.insert(hash, event);
         Ok(hash)

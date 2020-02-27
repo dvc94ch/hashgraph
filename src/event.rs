@@ -1,13 +1,13 @@
 //! Defines an event and it's properties.
-use crate::author::{Author, Signature};
+use crate::author::{Author, Identity, Signature};
 use crate::error::Error;
 use crate::hash::{GENESIS_HASH, Hash, Hasher};
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A raw hashgraph event.
+/// An unsigned raw hashgraph event.
 #[derive(Clone, Debug)]
-pub struct RawEvent<T> {
+pub struct UnsignedRawEvent<T> {
     /// Arbitrary binary payload of the event.
     pub payload: Box<[T]>,
     /// The last self parent.
@@ -18,11 +18,9 @@ pub struct RawEvent<T> {
     pub time: SystemTime,
     /// Author id of the author.
     pub author: Author,
-    /// Author's digital signature of hash.
-    pub signature: Signature,
 }
 
-impl<T: Serialize> RawEvent<T> {
+impl<T: Serialize> UnsignedRawEvent<T> {
     pub fn hash(&self) -> Result<Hash, Error> {
         let mut hasher = Hasher::new();
         hasher.write(&*self.self_hash.unwrap_or(GENESIS_HASH));
@@ -34,6 +32,24 @@ impl<T: Serialize> RawEvent<T> {
         }
         Ok(hasher.sum())
     }
+
+    pub fn sign(self, identity: &Identity) -> Result<RawEvent<T>, Error> {
+        let hash = self.hash()?;
+        let signature = identity.sign(&*hash);
+        Ok(RawEvent {
+            event: self,
+            signature,
+        })
+    }
+}
+
+/// A raw hashgraph event.
+#[derive(Clone, Debug)]
+pub struct RawEvent<T> {
+    /// The raw event data.
+    pub(crate) event: UnsignedRawEvent<T>,
+    /// Author's digital signature of hash.
+    pub(crate) signature: Signature,
 }
 
 /// A hashgraph event.
@@ -63,10 +79,10 @@ impl<T: Serialize> Event<T> {
     /// Create a new event from a raw event.
     pub(crate) fn new(raw: RawEvent<T>, hash: Hash, seq: u64) -> Self {
         let mut parents = Vec::with_capacity(2);
-        if let Some(self_hash) = raw.self_hash {
+        if let Some(self_hash) = raw.event.self_hash {
             parents.push(self_hash);
         }
-        if let Some(other_hash) = raw.other_hash {
+        if let Some(other_hash) = raw.event.other_hash {
             parents.push(other_hash);
         }
         Self {
@@ -86,7 +102,7 @@ impl<T: Serialize> Event<T> {
 impl<T> Event<T> {
     /// Payload of the event.
     pub fn payload(&self) -> &[T] {
-        &self.raw.payload
+        &self.raw.event.payload
     }
 
     /// Set of hashes of parents of an event.
@@ -96,17 +112,17 @@ impl<T> Event<T> {
 
     /// Hash of the self parent of an event.
     pub fn self_parent_hash(&self) -> Option<&Hash> {
-        self.raw.self_hash.as_ref()
+        self.raw.event.self_hash.as_ref()
     }
 
     /// Author's claimed data and time of the event.
     pub fn time(&self) -> &SystemTime {
-        &self.raw.time
+        &self.raw.event.time
     }
 
     /// Author of the event.
     pub fn author(&self) -> Author {
-        self.raw.author
+        self.raw.event.author
     }
 
     /// Hash of the event.

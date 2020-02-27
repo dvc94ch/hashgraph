@@ -18,7 +18,7 @@ use ::serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Op {
+pub enum Transaction {
     AddAuthor(Box<[u8]>, u64),
     RemAuthor(Box<[u8]>, u64),
     SignBlock(Box<[u8]>),
@@ -26,6 +26,40 @@ pub enum Op {
     Remove(Box<[u8]>),
     CompareAndSwap(Box<[u8]>, Option<Box<[u8]>>, Option<Box<[u8]>>),
     SignCheckpoint(Box<[u8]>),
+}
+
+impl Transaction {
+    pub fn add_author(author: Author, block: u64) -> Self {
+        Self::AddAuthor(author.as_bytes().to_vec().into_boxed_slice(), block)
+    }
+
+    pub fn rem_author(author: Author, block: u64) -> Self {
+        Self::RemAuthor(author.as_bytes().to_vec().into_boxed_slice(), block)
+    }
+
+    pub fn sign_block(sig: &Signature) -> Self {
+        Self::SignBlock(sig.to_bytes().to_vec().into_boxed_slice())
+    }
+
+    pub fn insert(key: &[u8], value: &[u8]) -> Self {
+        Self::Insert(key.to_vec().into_boxed_slice(), value.to_vec().into_boxed_slice())
+    }
+
+    pub fn remove(key: &[u8]) -> Self {
+        Self::Remove(key.to_vec().into_boxed_slice())
+    }
+
+    pub fn compare_and_swap(key: &[u8], old: Option<&[u8]>, new: Option<&[u8]>) -> Self {
+        Self::CompareAndSwap(
+            key.to_vec().into_boxed_slice(),
+            old.map(|old| old.to_vec().into_boxed_slice()),
+            new.map(|new| new.to_vec().into_boxed_slice()),
+        )
+    }
+
+    pub fn sign_checkpoint(sig: &Signature) -> Self {
+        Self::SignCheckpoint(sig.to_bytes().to_vec().into_boxed_slice())
+    }
 }
 
 pub struct State {
@@ -56,23 +90,23 @@ impl State {
         self.state.tree()
     }
 
-    pub fn commit(&mut self, author: Author, op: &Op) -> Result<(), Error> {
+    pub fn commit(&mut self, author: Author, op: &Transaction) -> Result<(), Error> {
         match op {
-            Op::AddAuthor(author, block) => {
+            Transaction::AddAuthor(author, block) => {
                 let author = Author::from_bytes(author)?;
                 self.authors.add_author(author, *block);
             }
-            Op::RemAuthor(author, block) => {
+            Transaction::RemAuthor(author, block) => {
                 let author = Author::from_bytes(author)?;
                 self.authors.rem_author(author, *block);
             }
-            Op::SignBlock(signature) => {
+            Transaction::SignBlock(signature) => {
                 let signature = Signature::from_bytes(signature)?;
                 self.authors.sign_block(author, signature);
             }
-            Op::Insert(key, value) => self.state.insert(author, key, value)?,
-            Op::Remove(key) => self.state.remove(author, key)?,
-            Op::CompareAndSwap(key, old, new) => {
+            Transaction::Insert(key, value) => self.state.insert(author, key, value)?,
+            Transaction::Remove(key) => self.state.remove(author, key)?,
+            Transaction::CompareAndSwap(key, old, new) => {
                 self.state.compare_and_swap(
                     author,
                     key,
@@ -80,7 +114,7 @@ impl State {
                     new.as_ref().map(|b| &**b),
                 )?;
             }
-            Op::SignCheckpoint(signature) => {
+            Transaction::SignCheckpoint(signature) => {
                 let signature = Signature::from_bytes(signature)?;
                 self.sign_checkpoint(author, signature)
             }
@@ -186,10 +220,6 @@ mod tests {
     use crate::author::Identity;
     use tempdir::TempDir;
 
-    fn bx(b: &[u8]) -> Box<[u8]> {
-        b.to_vec().into_boxed_slice()
-    }
-
     fn gen_ids(n: usize) -> Vec<Identity> {
         let mut ids = Vec::with_capacity(n);
         for _ in 0..n {
@@ -216,13 +246,13 @@ mod tests {
 
         let authors = state.start_round().unwrap();
         assert_eq!(authors.len(), 2);
-        state.commit(ids[0].author(), &Op::AddAuthor(bx(ids[2].author().as_bytes()), 1)).unwrap();
-        state.commit(ids[0].author(), &Op::RemAuthor(bx(ids[0].author().as_bytes()), 1)).unwrap();
+        state.commit(ids[0].author(), &Transaction::add_author(ids[2].author(), 1)).unwrap();
+        state.commit(ids[0].author(), &Transaction::rem_author(ids[0].author(), 1)).unwrap();
 
         let authors2 = state.start_round().unwrap();
         assert_eq!(authors, authors2);
         let sig = ids[0].sign(&*state.block_hash().unwrap());
-        state.commit(ids[0].author(), &Op::SignBlock(bx(&sig.to_bytes()))).unwrap();
+        state.commit(ids[0].author(), &Transaction::sign_block(&sig)).unwrap();
 
         let authors3 = state.start_round().unwrap();
         assert_eq!(authors3.len(), 2);
@@ -239,7 +269,7 @@ mod tests {
 
         let dir = path.join("checkpoint");
         async_std::fs::create_dir_all(&dir).await.unwrap();
-        state.commit(ids[0].author(), &Op::Insert(bx(b"key"), bx(b"value"))).unwrap();
+        state.commit(ids[0].author(), &Transaction::insert(b"key", b"value")).unwrap();
 
         let checkpoint = state.export_checkpoint(&dir).await.unwrap();
 
