@@ -1,5 +1,5 @@
 use crate::author::{Author, Signature};
-use crate::error::StateError;
+use crate::error::Error;
 use crate::hash::{Hash, Hasher, GENESIS_HASH, HASH_LENGTH};
 use disco::ed25519::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use std::collections::HashSet;
@@ -52,7 +52,7 @@ impl SignedBlock {
         Self { block, signatures }
     }
 
-    pub fn validate_and_apply(self, authors: &mut HashSet<Author>) -> Result<Vec<u8>, StateError> {
+    pub fn validate_and_apply(self, authors: &mut HashSet<Author>) -> Result<Vec<u8>, Error> {
         let population = authors.len();
         let threshold = population - population * 2 / 3;
         let hash = self.block.hash();
@@ -69,7 +69,7 @@ impl SignedBlock {
             }
         }
         if signees.len() < threshold {
-            return Err(StateError::InvalidBlock);
+            return Err(Error::InvalidBlock);
         }
         for author in &self.block.authors[..] {
             if authors.contains(author) {
@@ -99,7 +99,7 @@ impl SignedBlock {
         buf
     }
 
-    pub fn deserialize(buf: &[u8]) -> Result<Self, StateError> {
+    pub fn deserialize(buf: &[u8]) -> Result<Self, Error> {
         let mut i1 = 0;
         let mut i2 = HASH_LENGTH;
         let parent = Hash::from_bytes(&buf[i1..i2]);
@@ -219,7 +219,7 @@ pub struct AuthorChain {
 }
 
 impl AuthorChain {
-    pub fn from_tree(tree: sled::Tree) -> Result<Self, StateError> {
+    pub fn from_tree(tree: sled::Tree) -> Result<Self, Error> {
         let mut lookup_hash = GENESIS_HASH;
         let mut block_id = 0;
         let mut authors = HashSet::new();
@@ -229,11 +229,11 @@ impl AuthorChain {
                 if let Some(bytes) = tree.get(&*lookup_hash)? {
                     let block = SignedBlock::deserialize(&bytes)?;
                     if block.validate_and_apply(&mut authors).is_err() {
-                        return Err(StateError::InvalidState);
+                        return Err(Error::InvalidState);
                     }
                     block_id += 1;
                 } else {
-                    return Err(StateError::InvalidState);
+                    return Err(Error::InvalidState);
                 };
             } else {
                 break;
@@ -248,7 +248,7 @@ impl AuthorChain {
         })
     }
 
-    pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), StateError> {
+    pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), Error> {
         self.builder = BlockBuilder::genesis(genesis_authors.clone());
         let proposed = self.builder.to_proposed();
         let (hash, block) = proposed.into_signed_block();
@@ -260,7 +260,7 @@ impl AuthorChain {
         Ok(())
     }
 
-    pub fn start_round(&mut self) -> Result<Box<[Author]>, StateError> {
+    pub fn start_round(&mut self) -> Result<Box<[Author]>, Error> {
         if let Some(proposed) = self.proposed.take() {
             let population = self.authors.len();
             let threshold = population - population * 2 / 3;
@@ -280,11 +280,11 @@ impl AuthorChain {
         Ok(canonicalize_authors(&self.authors))
     }
 
-    pub fn genesis_hash(&self) -> Result<Hash, StateError> {
+    pub fn genesis_hash(&self) -> Result<Hash, Error> {
         if let Some(hash) = self.tree.get(lookup(&GENESIS_HASH))? {
             Ok(Hash::from_bytes(&hash))
         } else {
-            Err(StateError::InvalidState)
+            Err(Error::InvalidState)
         }
     }
 

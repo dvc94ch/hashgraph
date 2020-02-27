@@ -1,200 +1,201 @@
+//! Implements voting and round handling.
+use crate::author::Author;
+use crate::error::Error;
+use crate::event::RawEvent;
+use crate::hash::Hash;
+use crate::graph::Graph;
+use serde::Serialize;
 
-// voting
-/*
-    /// round(x) - round(y)
-    pub fn diff(&self, x: &Event, y: &Event) -> i32 {
-        (self.round(x) as i64 - self.round(y) as i64) as i32
-    }
+const FREQ_COIN_ROUNDS: usize = 10;
 
-    /// The number of votes equal to v about the fame of witness y collected by
-    /// witness x from witnesses in the previous round.
-    pub fn votes(&self, x: &Event, y: &Event, v: bool) -> u32 {
-        0
-    }
-
-    /// Fraction of votes equal to true, regarding the fame of witness y,
-    /// collected by witness x from witnesses in the previous round.
-    pub fn fract_true(&self, x: &Event, y: &Event) -> u32 {
-        0
-    }
-
-    /// If x (or its self ancestor) "decided" for the election for witness y
-    /// (and therefore that member will never change its vote about y again).
-    pub fn decide(&self, x: &Event, y: &Event) -> bool {
-        false
-    }
-
-    /// If x should simply copy its selfParent's vote about the fame of witness
-    /// y (or x is not a witness, or has already decided earlier).
-    pub fn copy_vote(&self, x: &Event, y: &Event) -> bool {
-        false
-    }
-
-    /// The vote by witness x about the fame of witness y (true for famous,
-    /// false for not).
-    pub fn vote(&self, x: &Event, y: &Event) -> bool {
-        false
-    }
-
-    /// If event is famous (i.e., has had its fame decided by someone, and
-    /// their vote was true).
-    pub fn famous(&self, event: &Event) -> bool {
-        false
-    }
-
-// ordering
-    /// If event is famous and is the only famous witness in that round by that
-    /// creator.
-    pub fn unique_famous(&self, event: &Event) -> bool {
-        false
-    }
-
-    /// If all known witnesses had their fame decided, for both round r and all
-    /// earlier rounds.
-    pub fn rounds_decided(&self, round: u32) -> bool {
-        false
-    }
-
-    /// The round received for event.
-    pub fn round_received(&self, event: &Event) -> u32 {
-        0
-    }
-
-    /// The consensus timestamp for event.
-    pub fn time_received(&self, event: &Event) -> SystemTime {
-        SystemTime::now()
-    }
-}
-
-/// The state of the consensus algorithm.
-pub struct Consensus {
+/// Rounds are a group events to be voted on.
+#[derive(Clone, Debug)]
+pub struct Round {
+    /// Monotonically increasing round number.
+    round: u64,
     /// Number of members in the population. Must be larger than one.
-    population: u32,
+    authors: Box<[Author]>,
     /// Frequency of coin rounds. Must be larger than two.
-    freq_coin_rounds: u32,
-    /// Hash graph containing all events.
-    graph: HashGraph,
+    freq_coin_rounds: usize,
+    /// Witnesses
+    witnesses: Vec<Hash>,
 }
 
-impl Consensus {
-    /// Initialize consensus algorithm.
-    pub fn new(population: u32, freq_coin_rounds: u32) -> Self {
-        assert!(population > 1);
-        assert!(freq_coin_rounds > 2);
+impl Round {
+    pub fn new(round: u64, authors: Box<[Author]>) -> Self {
+        let witnesses = Vec::with_capacity(authors.len());
         Self {
-            population,
-            freq_coin_rounds,
-            graph: Default::default(),
-        }
-    }
-
-    /// true if the set of events has more than 2n/3 events, and all have
-    /// distinct authors.
-    fn many_creators(&self, events: &HashSet<&Event>) -> bool {
-        if events.len() <= (2 * self.population / 3) as usize {
-            return false;
-        }
-        let mut authors = HashSet::new();
-        for event in events {
-            if authors.contains(event.author()) {
-                return false;
-            }
-            authors.insert(event.author());
-        }
-        true
-    }
-
-}*/
-
-
-/*
-pub struct Event {
-    round: u32,
-    witness: bool,
-    famous: bool,
-    vote: bool,
-}
-
-    pub async fn send_sync(&self, peer: u32) {
-        assert!(peer < self.population);
-        // sync all known events
-    }
-
-    pub async fn receive_sync(&self) -> Vec<RawEvent> {
-        // receive a sync
-        //
-    }
-
-    pub fn divide_rounds(&self, raw: &RawEvent) -> Event {
-        let self_parent = raw.self_parent.map(self.graph.get).unwrap_or(None);
-        let other_parent = raw.other_parent.map(self.graph.get).unwrap_or(None);
-        let self_parent_round = self_parent.map(|event| event.round).unwrap_or(1);
-        let other_parent_round = other_parent.map(|event| event.round).unwrap_or(1);
-        let parent_round = u32::max(self_parent_round, other_parent_round);
-        let round = if false { // raw can strongly see more than 2n/3 round r witnesses
-            round + 1
-        } else {
-            round
-        };
-        let witness = self_parent.is_none() || round > self_parent_round;
-        Event {
             round,
-            witness,
-            self_parent,
-            other_parent,
+            authors,
+            witnesses,
+            freq_coin_rounds: FREQ_COIN_ROUNDS,
         }
     }
 
-    pub async fn run(self: Arc<Self>) {
-        task::spawn(async {
-            loop {
-                // select random member
-                let peer = 0;
-                self.send_sync(peer).await
-            }
-        });
-        task::spawn(async {
-            loop {
-                let raw_events = self.receive_sync().await;
-                for raw in &events {
-                    let event = self.divide_rounds(raw);
-                }
-                // divide rounds
-                // decide fame
-                // find order
-            }
-        });
+    /// Round number.
+    pub fn round(&self) -> u64 {
+        self.round
+    }
+
+    /// Authors
+    pub fn authors(&self) -> &[Author] {
+        &self.authors
+    }
+
+    /// Population of a round.
+    pub fn population(&self) -> usize {
+        self.authors.len()
+    }
+
+    /// Supermajority threshold of a round.
+    pub fn threshold(&self) -> usize {
+        2 * self.population() / 3
+    }
+
+    /// Frequency of coin flipping rounds.
+    pub fn freq_coin_rounds(&self) -> usize {
+        self.freq_coin_rounds
+    }
+
+    /// Witnesses of a round.
+    pub fn witnesses(&self) -> &[Hash] {
+        &self.witnesses
     }
 }
 
-    pub async fn receive_sync(&self, state: State) -> RawEvent {
-        // receive raw event from peer
-        RawEvent {
-            payload: vec![].into_boxed_slice(),
-            hashes: vec![],
-            time: SystemTime::now(),
-            author: 0,
-            hash: multihash::Sha2_256::digest(&[]),
-            signature: vec![].into_boxed_slice(),
+/// Voter splits events into rounds and orders them into a globally agreed
+/// consensus order.
+pub struct Voter<T> {
+    graph: Graph<T>,
+    rounds: Vec<Round>,
+}
+
+impl<T> Voter<T> {
+    /// Creates a new voter.
+    pub fn new() -> Self {
+        Self {
+            graph: Graph::new(),
+            rounds: Vec::new(),
         }
     }
 
-    pub async fn run(self) {
-        task::spawn(async {
-            let mut rng = rand::thread_rng();
-            loop {
-                let state = self.state.read().await.clone();
-                let peer = rng.gen() % state.population();
-                self.send_sync(peer, state).await
+    /// Decide if a witness is famous.
+    pub fn is_witness_famous(&self, _witness: &Hash, rounds: &[Round]) -> Option<bool> {
+        let authors = rounds[0].authors();
+        let threshold = rounds[0].threshold();
+        let freq_coin_rounds = rounds[0].freq_coin_rounds() as usize;
+        for diff in 1..rounds.len() {
+            for wy in rounds[diff].witnesses() {
+                let _strongly_seen_witnesses = rounds[diff - 1]
+                    .witnesses()
+                    .into_iter()
+                    .filter(|w| self.graph.strongly_see(wy, w, authors));
+
+                // TODO majority vote in strongly_seen_witnesses (is true for a tie)
+                let vote = false;
+                // TODO number of events in s with a vote of v
+                let num_votes = 0;
+
+                if diff == 1 { // first round of the election
+                     // TODO y.vote <- can y see x
+                } else {
+                    if diff % freq_coin_rounds > 0 {
+                        // this is a normal round
+                        if num_votes > threshold {
+                            // decide
+                            // TODO wx.famous = vote
+                            // TODO wy.vote = vote
+                            return Some(vote);
+                        }
+                    } else {
+                        // this is a coin round
+                        if num_votes > threshold {
+                            // vote
+                            // wy.vote = vote
+                        } else {
+                            // flip a coin
+                            // TODO wy.vote = f(wy.signature())
+                        }
+                    }
+                }
             }
-        });
-        task::spawn(async {
-            loop {
-                let state = self.state.read().await.clone();
-                let event = self.receive_sync(state).await;
-                let state = self.graph.write().await.add_event(event);
-                *self.state.write().await = state;
-            }
-        });
+        }
+        None
     }
-*/
+
+    /// A round is famous when all it's witnesses are famous.
+    pub fn famous_witnesses(&self, rounds: &[Round]) -> Option<Vec<Hash>> {
+        let witnesses = rounds[0].witnesses();
+        let mut famous_witnesses = Vec::with_capacity(witnesses.len());
+        for witness in witnesses {
+            if let Some(famous) = self.is_witness_famous(witness, rounds) {
+                if famous {
+                    famous_witnesses.push(*witness);
+                }
+            } else {
+                return None;
+            }
+        }
+        Some(famous_witnesses)
+    }
+
+    /// Iterates through rounds and performs a vote. If the fame of all witnesses
+    /// is decided it calculates the order of events within a round and retires
+    /// the round into history.
+    pub fn process_rounds(&mut self) {
+        /*for (i, round) in  self.rounds.iter().enumerate() {
+            if let Some(_famous_witnesses) = self.famous_witnesses(&self.rounds[i..]) {
+                // TODO order round and retire
+                self.rounds = self.rounds[i..].to_vec();
+            } else {
+                break;
+            }
+        }*/
+    }
+}
+
+impl<T: Serialize> Voter<T> {
+    /// The maximum created round of all self parents of x (or 1 if there are none).
+    /// Event x is a witness if x has a greater created round than its self parent.
+    pub fn add_event<F: FnOnce() -> Result<Box<[Author]>, Error>>(
+        &mut self,
+        event: RawEvent<T>,
+        start_round: F,
+    ) -> Result<(), Error> {
+        let hash = self.graph.add_event(event)?;
+        let parent_round = self
+            .graph
+            .parents(self.graph.event(&hash).unwrap())
+            .into_iter()
+            .filter_map(|p| p.round_created())
+            .max()
+            .unwrap_or(1);
+        let round = &self.rounds[parent_round as usize];
+        let majority = round
+            .witnesses()
+            .into_iter()
+            .filter(|w| {
+                self.graph
+                    .strongly_see(&hash, w, round.authors())
+            })
+            .nth(round.threshold() as usize)
+            .is_some();
+        let round = if majority {
+            parent_round + 1
+        } else {
+            parent_round
+        };
+        let witness = round > parent_round;
+        let mut event = self.graph.event_mut(&hash).unwrap();
+        event.round_created = Some(round);
+        event.witness = Some(witness);
+
+        if self.rounds.last().map(|r| r.round < round).unwrap_or(true) {
+            let authors = start_round()?;
+            self.rounds.push(Round::new(round, authors));
+        }
+        self.rounds.last_mut().unwrap().witnesses.push(hash);
+        self.process_rounds();
+        Ok(())
+    }
+}

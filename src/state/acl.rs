@@ -1,6 +1,6 @@
 use super::tree::Tree;
 use crate::author::Author;
-use crate::error::StateError;
+use crate::error::Error;
 
 pub struct Acl {
     pub(crate) tree: sled::Tree,
@@ -11,12 +11,12 @@ impl Acl {
         Self { tree }
     }
 
-    pub fn insert(&self, _author: Author, key: &[u8], value: &[u8]) -> Result<(), StateError> {
+    pub fn insert(&self, _author: Author, key: &[u8], value: &[u8]) -> Result<(), Error> {
         self.tree.insert(key, value)?;
         Ok(())
     }
 
-    pub fn remove(&self, _author: Author, key: &[u8]) -> Result<(), StateError> {
+    pub fn remove(&self, _author: Author, key: &[u8]) -> Result<(), Error> {
         self.tree.remove(key)?;
         Ok(())
     }
@@ -27,7 +27,7 @@ impl Acl {
         key: &[u8],
         old: Option<&[u8]>,
         new: Option<&[u8]>,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), Error> {
         self.tree.compare_and_swap(key, old, new)?.ok();
         Ok(())
     }

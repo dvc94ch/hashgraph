@@ -11,20 +11,21 @@ use self::serde::{Exporter, Importer};
 pub use self::tree::Tree;
 pub use self::checkpoint::{Checkpoint, SignedCheckpoint};
 use crate::author::{Author, Signature};
-use crate::error::StateError;
+use crate::error::Error;
 use crate::hash::{FileHasher, Hash};
 use async_std::path::Path;
+use ::serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Op {
-    AddAuthor(Author, u64),
-    RemAuthor(Author, u64),
-    SignBlock(Signature),
+    AddAuthor(Box<[u8]>, u64),
+    RemAuthor(Box<[u8]>, u64),
+    SignBlock(Box<[u8]>),
     Insert(Box<[u8]>, Box<[u8]>),
     Remove(Box<[u8]>),
     CompareAndSwap(Box<[u8]>, Option<Box<[u8]>>, Option<Box<[u8]>>),
-    SignCheckpoint(Signature),
+    SignCheckpoint(Box<[u8]>),
 }
 
 pub struct State {
@@ -36,18 +37,18 @@ pub struct State {
 }
 
 impl State {
-    pub fn open(path: &Path) -> Result<Self, StateError> {
+    pub fn open(path: &Path) -> Result<Self, Error> {
         let db = sled::open(path.join("sled"))?;
         let authors = AuthorChain::from_tree(db.open_tree("authors")?)?;
         let state = Acl::from_tree(db.open_tree("state")?);
         Ok(Self { _db: db, authors, state, checkpoint: None, proposed: None })
     }
 
-    pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), StateError> {
+    pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), Error> {
         self.authors.genesis(genesis_authors)
     }
 
-    pub fn genesis_hash(&self) -> Result<Hash, StateError> {
+    pub fn genesis_hash(&self) -> Result<Hash, Error> {
         self.authors.genesis_hash()
     }
 
@@ -55,11 +56,20 @@ impl State {
         self.state.tree()
     }
 
-    pub fn commit(&mut self, author: Author, op: &Op) -> Result<(), StateError> {
+    pub fn commit(&mut self, author: Author, op: &Op) -> Result<(), Error> {
         match op {
-            Op::AddAuthor(author, block) => self.authors.add_author(*author, *block),
-            Op::RemAuthor(author, block) => self.authors.rem_author(*author, *block),
-            Op::SignBlock(signature) => self.authors.sign_block(author, *signature),
+            Op::AddAuthor(author, block) => {
+                let author = Author::from_bytes(author)?;
+                self.authors.add_author(author, *block);
+            }
+            Op::RemAuthor(author, block) => {
+                let author = Author::from_bytes(author)?;
+                self.authors.rem_author(author, *block);
+            }
+            Op::SignBlock(signature) => {
+                let signature = Signature::from_bytes(signature)?;
+                self.authors.sign_block(author, signature);
+            }
             Op::Insert(key, value) => self.state.insert(author, key, value)?,
             Op::Remove(key) => self.state.remove(author, key)?,
             Op::CompareAndSwap(key, old, new) => {
@@ -70,12 +80,15 @@ impl State {
                     new.as_ref().map(|b| &**b),
                 )?;
             }
-            Op::SignCheckpoint(signature) => self.sign_checkpoint(author, *signature),
+            Op::SignCheckpoint(signature) => {
+                let signature = Signature::from_bytes(signature)?;
+                self.sign_checkpoint(author, signature)
+            }
         }
         Ok(())
     }
 
-    pub fn start_round(&mut self) -> Result<Box<[Author]>, StateError> {
+    pub fn start_round(&mut self) -> Result<Box<[Author]>, Error> {
         self.authors.start_round()
     }
 
@@ -83,7 +96,7 @@ impl State {
         self.authors.hash()
     }
 
-    pub async fn export_checkpoint(&mut self, dir: &Path) -> Result<Checkpoint, StateError> {
+    pub async fn export_checkpoint(&mut self, dir: &Path) -> Result<Checkpoint, Error> {
         let mut fh = FileHasher::create_tmp(&dir).await?;
         Exporter::new(&self.authors.tree, &mut fh)
             .write_tree()
@@ -100,7 +113,7 @@ impl State {
         &mut self,
         dir: &Path,
         checkpoint: SignedCheckpoint,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), Error> {
         let genesis = self.genesis_hash().ok();
 
         self.authors.tree.clear()?;
@@ -113,7 +126,7 @@ impl State {
         if fh.hash() != *checkpoint {
             self.authors.tree.clear()?;
             self.state.tree.clear()?;
-            return Err(StateError::InvalidCheckpoint);
+            return Err(Error::InvalidCheckpoint);
         }
 
         // make sure that it's still the same chain by comparing the new genesis hash.
@@ -121,7 +134,7 @@ impl State {
         if let Some(genesis) = genesis {
             let new_genesis = new_authors.genesis_hash()?;
             if genesis != new_genesis {
-                return Err(StateError::InvalidCheckpoint);
+                return Err(Error::InvalidCheckpoint);
             }
         }
 
@@ -141,7 +154,7 @@ impl State {
             }
         }
         if signees.len() < threshold {
-            return Err(StateError::InvalidCheckpoint);
+            return Err(Error::InvalidCheckpoint);
         }
 
         self.authors = new_authors;
@@ -203,13 +216,13 @@ mod tests {
 
         let authors = state.start_round().unwrap();
         assert_eq!(authors.len(), 2);
-        state.commit(ids[0].author(), &Op::AddAuthor(ids[2].author(), 1)).unwrap();
-        state.commit(ids[0].author(), &Op::RemAuthor(ids[0].author(), 1)).unwrap();
+        state.commit(ids[0].author(), &Op::AddAuthor(bx(ids[2].author().as_bytes()), 1)).unwrap();
+        state.commit(ids[0].author(), &Op::RemAuthor(bx(ids[0].author().as_bytes()), 1)).unwrap();
 
         let authors2 = state.start_round().unwrap();
         assert_eq!(authors, authors2);
         let sig = ids[0].sign(&*state.block_hash().unwrap());
-        state.commit(ids[0].author(), &Op::SignBlock(sig)).unwrap();
+        state.commit(ids[0].author(), &Op::SignBlock(bx(&sig.to_bytes()))).unwrap();
 
         let authors3 = state.start_round().unwrap();
         assert_eq!(authors3.len(), 2);

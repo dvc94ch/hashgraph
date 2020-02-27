@@ -1,7 +1,7 @@
 //! Author tracking.
-use crate::error::IdentityError;
+use crate::error::Error;
 use async_std::fs::{File, Permissions};
-use async_std::path::{Path, PathBuf};
+use async_std::path::Path;
 use async_std::{fs, prelude::*};
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
@@ -63,7 +63,7 @@ impl Identity {
         Author(self.0.public)
     }
 
-    pub async fn load_from(path: &Path) -> Result<Self, IdentityError> {
+    pub async fn load_from(path: &Path) -> Result<Self, Error> {
         if !path.exists().await {
             let key = Self::generate();
             let bytes = key.0.to_bytes();
@@ -76,26 +76,20 @@ impl Identity {
         let key = Keypair::from_bytes(&bytes)?;
         Ok(Self(key))
     }
-
-    pub async fn load_from_default() -> Result<Self, IdentityError> {
-        let dir = if let Some(dir) = dirs::config_dir() {
-            PathBuf::from(dir)
-        } else {
-            return Err(IdentityError::ConfigDir);
-        };
-        fs::create_dir_all(&dir).await?;
-        Self::load_from(&dir.join("identity")).await
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempdir::TempDir;
 
     #[async_std::test]
-    async fn load_from_default() {
-        let key1 = Identity::load_from_default().await.unwrap();
-        let key2 = Identity::load_from_default().await.unwrap();
+    async fn load_from() {
+        let tmp = TempDir::new("load_from").unwrap();
+        let path = tmp.path().join("identity");
+        let path: &Path = path.as_path().into();
+        let key1 = Identity::load_from(path).await.unwrap();
+        let key2 = Identity::load_from(path).await.unwrap();
         assert_eq!(&key1.0.to_bytes()[..], &key2.0.to_bytes()[..]);
     }
 }

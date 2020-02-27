@@ -1,4 +1,4 @@
-use crate::error::HashError;
+use crate::error::Error;
 use async_std::fs::{self, File};
 use async_std::io::{Read, Result as IoResult, Write};
 use async_std::path::{Path, PathBuf};
@@ -80,7 +80,7 @@ impl FileHasher {
         dir.join(BASE32.encode(&**hash))
     }
 
-    pub async fn create_tmp(dir: &Path) -> Result<Self, HashError> {
+    pub async fn create_tmp(dir: &Path) -> Result<Self, Error> {
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let mut hasher = Hasher::new();
         hasher.write(&timestamp.to_be_bytes());
@@ -88,7 +88,7 @@ impl FileHasher {
         Self::create(path.as_ref()).await
     }
 
-    pub async fn create(path: &Path) -> Result<Self, HashError> {
+    pub async fn create(path: &Path) -> Result<Self, Error> {
         let file = File::create(path).await?;
         let hasher = Hasher::new();
         Ok(Self {
@@ -98,12 +98,12 @@ impl FileHasher {
         })
     }
 
-    pub async fn open_with_hash(dir: &Path, hash: &Hash) -> Result<Self, HashError> {
+    pub async fn open_with_hash(dir: &Path, hash: &Hash) -> Result<Self, Error> {
         let path = Self::path_for_hash(dir, hash);
         Self::open(&path).await
     }
 
-    pub async fn open(path: &Path) -> Result<Self, HashError> {
+    pub async fn open(path: &Path) -> Result<Self, Error> {
         let file = File::open(path).await?;
         let hasher = Hasher::new();
         Ok(Self {
@@ -113,7 +113,7 @@ impl FileHasher {
         })
     }
 
-    pub async fn rename(self, dir: &Path) -> Result<Hash, HashError> {
+    pub async fn rename(self, dir: &Path) -> Result<Hash, Error> {
         let hash = self.hasher.sum();
         let path = Self::path_for_hash(dir, &hash);
         fs::rename(self.path, path).await?;

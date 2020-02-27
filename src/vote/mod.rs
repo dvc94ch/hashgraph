@@ -1,2 +1,2 @@
-mod round;
 mod vote;
+pub use vote::Voter;

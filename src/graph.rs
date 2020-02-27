@@ -1,23 +1,21 @@
 //! Gossip graph
-use crate::event::Event;
+use crate::author::Author;
+use crate::error::Error;
+use crate::event::{Event, RawEvent};
 use crate::hash::Hash;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Gossip graph.
 #[derive(Debug, Default)]
-pub struct Graph {
-    events: HashMap<Hash, Event>,
+pub struct Graph<T> {
+    events: HashMap<Hash, Event<T>>,
 }
 
 // Parents and ancestors
-impl Graph {
-    /// Get the event.
-    pub fn get(&self, hash: &Hash) -> Option<&Event> {
-        self.events.get(hash)
-    }
-
+impl<T> Graph<T> {
     /// Set of parents of an event.
-    pub fn parents(&self, event: &Event) -> Vec<&Event> {
+    pub fn parents(&self, event: &Event<T>) -> Vec<&Event<T>> {
         event
             .parent_hashes()
             .into_iter()
@@ -26,7 +24,7 @@ impl Graph {
     }
 
     /// Self parent of an event.
-    pub fn self_parent(&self, event: &Event) -> Option<&Event> {
+    pub fn self_parent(&self, event: &Event<T>) -> Option<&Event<T>> {
         event
             .self_parent_hash()
             .map(|mh| self.events.get(mh))
@@ -34,7 +32,7 @@ impl Graph {
     }
 
     /// Returns an iterator of an events ancestors.
-    pub fn ancestors<'a>(&'a self, event: &'a Event) -> AncestorIter<'a> {
+    pub fn ancestors<'a>(&'a self, event: &'a Event<T>) -> AncestorIter<'a, T> {
         AncestorIter {
             graph: self,
             stack: vec![Box::new(vec![event].into_iter())],
@@ -42,7 +40,7 @@ impl Graph {
     }
 
     /// Returns an iterator of an events self ancestors.
-    pub fn self_ancestors<'a>(&'a self, event: &'a Event) -> SelfAncestorIter<'a> {
+    pub fn self_ancestors<'a>(&'a self, event: &'a Event<T>) -> SelfAncestorIter<'a, T> {
         SelfAncestorIter {
             graph: self,
             event: Some(event),
@@ -51,13 +49,13 @@ impl Graph {
 
     /// Event x is an ancestor of y if x can reach y by following 0 or more
     /// parent edges.
-    pub fn ancestor<'a>(&'a self, x: &'a Event, y: &Event) -> bool {
+    pub fn ancestor<'a>(&'a self, x: &'a Event<T>, y: &Event<T>) -> bool {
         self.ancestors(x).find(|e| e.hash() == y.hash()).is_some()
     }
 
     /// Event x is a self_ancestor of y if x can reach y by following 0 or more
     /// self_parent edges.
-    pub fn self_ancestor<'a>(&'a self, x: &'a Event, y: &Event) -> bool {
+    pub fn self_ancestor<'a>(&'a self, x: &'a Event<T>, y: &Event<T>) -> bool {
         self.self_ancestors(x)
             .find(|e| e.hash() == y.hash())
             .is_some()
@@ -65,13 +63,13 @@ impl Graph {
 }
 
 /// Iterator of ancestors.
-pub struct AncestorIter<'a> {
-    graph: &'a Graph,
-    stack: Vec<Box<dyn Iterator<Item = &'a Event> + 'a>>,
+pub struct AncestorIter<'a, T> {
+    graph: &'a Graph<T>,
+    stack: Vec<Box<dyn Iterator<Item = &'a Event<T>> + 'a>>,
 }
 
-impl<'a> Iterator for AncestorIter<'a> {
-    type Item = &'a Event;
+impl<'a, T> Iterator for AncestorIter<'a, T> {
+    type Item = &'a Event<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -92,13 +90,13 @@ impl<'a> Iterator for AncestorIter<'a> {
 }
 
 /// Iterator of self ancestors.
-pub struct SelfAncestorIter<'a> {
-    graph: &'a Graph,
-    event: Option<&'a Event>,
+pub struct SelfAncestorIter<'a, T> {
+    graph: &'a Graph<T>,
+    event: Option<&'a Event<T>>,
 }
 
-impl<'a> Iterator for SelfAncestorIter<'a> {
-    type Item = &'a Event;
+impl<'a, T> Iterator for SelfAncestorIter<'a, T> {
+    type Item = &'a Event<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_event = if let Some(event) = self.event.as_ref() {
@@ -113,10 +111,11 @@ impl<'a> Iterator for SelfAncestorIter<'a> {
 }
 
 // seeing
-impl Graph {
+impl<T> Graph<T> {
     /// Event x sees y if y is an ancestor of x, but no fork of y is an
     /// ancestor of x.
-    pub fn see(&self, x: &Event, y: &Event) -> bool {
+    pub fn see(&self, x: &Hash, y: &Hash) -> bool {
+        let (x, y) = (self.event(x).unwrap(), self.event(y).unwrap());
         let mut is_ancestor = false;
         let mut created = Vec::new();
         for ancestor in self.ancestors(x) {
@@ -142,51 +141,76 @@ impl Graph {
 
     /// Event x strongly sees y if x can see events by more than 2n/3 authors,
     /// each of which sees y.
-    pub fn strongly_see(&self, x: &Event, y: &Event, n: u32) -> bool {
-        let ay: Vec<u32> = (0..n)
-            .into_iter()
-            .map(|n| {
+    pub fn strongly_see(&self, x: &Hash, y: &Hash, authors: &[Author]) -> bool {
+        let (x, y) = (self.event(x).unwrap(), self.event(y).unwrap());
+        let ay: Vec<_> = authors
+            .iter()
+            .map(|author| {
                 self.ancestors(y)
-                    .find(|ancestor| ancestor.author() == n)
+                    .find(|ancestor| ancestor.author() == *author)
                     .map(|ancestor| ancestor.seq())
                     .unwrap_or(1)
             })
             .collect();
-        let ax: Vec<u32> = (0..n)
-            .into_iter()
-            .map(|n| {
+        let ax: Vec<_> = authors
+            .iter()
+            .map(|author| {
                 self.ancestors(x)
                     // TODO more efficient traversal
                     .collect::<Vec<_>>()
                     .iter()
                     .rev()
-                    .find(|ancestor| ancestor.author() == n)
+                    .find(|ancestor| ancestor.author() == *author)
                     .map(|ancestor| ancestor.seq())
                     .unwrap_or(1)
             })
             .collect();
         let number_of_authors_see = ay.into_iter().zip(ax).filter(|(y, x)| y >= x).count();
-        number_of_authors_see > 2 * n as usize / 3
+        number_of_authors_see > 2 * authors.len() / 3
     }
 }
 
-impl Graph {
+impl<T> Graph<T> {
     pub fn new() -> Self {
         Self {
             events: Default::default(),
         }
     }
 
-    /// Adds an event to the graph.
-    pub fn add_event(&mut self, event: Event) {
-        self.events.insert(event.hash().clone(), event);
+    /// Retrieves an event from the graph.
+    pub fn event(&self, hash: &Hash) -> Option<&Event<T>> {
+        self.events.get(hash)
+    }
+
+    /// Retrieves a mutable event from the graph.
+    pub fn event_mut(&mut self, hash: &Hash) -> Option<&mut Event<T>> {
+        self.events.get_mut(hash)
     }
 
     /// Removes an event from the graph.
-    pub fn remove_event(&mut self, event: Event) {
+    pub fn remove_event(&mut self, event: Event<T>) {
         let ancestors: Vec<_> = self.ancestors(&event).map(|e| e.hash().clone()).collect();
         for ancestor in ancestors {
             self.events.remove(&ancestor);
         }
+    }
+}
+
+impl<T: Serialize> Graph<T> {
+    /// Adds an event to the graph.
+    pub fn add_event(&mut self, event: RawEvent<T>) -> Result<Hash, Error> {
+        let seq = if let Some(parent) = &event.self_hash {
+            self.events.get(parent).ok_or(Error::InvalidEvent)?.seq() + 1
+        } else {
+            1
+        };
+        if let Some(parent) = &event.other_hash {
+            self.events.get(parent).ok_or(Error::InvalidEvent)?;
+        }
+        let hash = event.hash()?;
+        event.author.verify(&*hash, &event.signature)?;
+        let event = Event::new(event, hash, seq);
+        self.events.insert(hash, event);
+        Ok(hash)
     }
 }
