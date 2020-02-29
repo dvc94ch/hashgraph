@@ -13,6 +13,8 @@ const FREQ_COIN_ROUNDS: usize = 10;
 pub struct Round {
     /// Monotonically increasing round number.
     round: u64,
+    /// Block number.
+    block: u64,
     /// Number of members in the population. Must be larger than one.
     authors: Box<[Author]>,
     /// Frequency of coin rounds. Must be larger than two.
@@ -22,10 +24,11 @@ pub struct Round {
 }
 
 impl Round {
-    pub fn new(round: u64, authors: Box<[Author]>) -> Self {
+    pub fn new(round: u64, block: u64, authors: Box<[Author]>) -> Self {
         let witnesses = Vec::with_capacity(authors.len());
         Self {
             round,
+            block,
             authors,
             witnesses,
             freq_coin_rounds: FREQ_COIN_ROUNDS,
@@ -66,7 +69,7 @@ impl Round {
 /// Voter splits events into rounds and orders them into a globally agreed
 /// consensus order.
 pub struct Voter<T> {
-    pub(crate) graph: Graph<T>,
+    graph: Graph<T>,
     rounds: Vec<Round>,
 }
 
@@ -79,8 +82,94 @@ impl<T> Voter<T> {
         }
     }
 
+    pub fn graph(&self) -> &Graph<T> {
+        &self.graph
+    }
+
+    pub fn sync_state(&self) -> (u64, Box<[Option<u64>]>) {
+        let round = self.rounds.last().unwrap();
+        (round.block, self.graph.sync_state(&round.authors))
+    }
+
+    /// Iterates through rounds and performs a vote. If the fame of all witnesses
+    /// is decided it calculates the order of events within a round and retires
+    /// the round into history.
+    pub fn process_rounds(&mut self) {
+        /*for (i, round) in  self.rounds.iter().enumerate() {
+            if let Some(_famous_witnesses) = self.famous_witnesses(&self.rounds[i..]) {
+                // TODO order round and retire
+                self.rounds = self.rounds[i..].to_vec();
+            } else {
+                break;
+            }
+        }*/
+    }
+}
+
+impl<T: Serialize> Voter<T> {
+    /// The maximum created round of all self parents of x (or 1 if there are none).
+    /// Event x is a witness if x has a greater created round than its self parent.
+    pub fn add_event<F: FnOnce() -> Result<(u64, Box<[Author]>), Error>>(
+        &mut self,
+        event: RawEvent<T>,
+        start_round: F,
+    ) -> Result<Hash, Error> {
+        let hash = self.graph.add_event(event)?;
+
+        let parent_round_num = self
+            .graph
+            .parents(self.graph.event(&hash).unwrap())
+            .into_iter()
+            .filter_map(|p| p.round_created())
+            .max()
+            .unwrap_or(0);
+        let parent_round = self.round(parent_round_num);
+
+        let is_witness = if let Some(parent_round) = parent_round {
+            parent_round
+                .witnesses()
+                .into_iter()
+                .filter(|w| self.graph.strongly_see(&hash, w, parent_round.authors()))
+                .nth(parent_round.threshold())
+                .is_some()
+        } else {
+            true
+        };
+
+        let round_num = if is_witness {
+            parent_round_num + 1
+        } else {
+            parent_round_num
+        };
+        if is_witness {
+            if let Some(round) = self.round_mut(round_num) {
+                round.witnesses.push(hash);
+            } else {
+                let (block, authors) = start_round()?;
+                let mut round = Round::new(round_num, block, authors);
+                round.witnesses.push(hash);
+                self.rounds.push(round);
+            }
+        }
+
+        let mut event = self.graph.event_mut(&hash).unwrap();
+        event.round_created = Some(round_num);
+        event.witness = Some(round_num > parent_round_num);
+        Ok(hash)
+    }
+}
+
+impl<T> Voter<T> {
+    fn round(&self, round: u64) -> Option<&Round> {
+        self.rounds.iter().find(|r| r.round == round)
+    }
+
+    fn round_mut(&mut self, round: u64) -> Option<&mut Round> {
+        self.rounds.iter_mut().find(|r| r.round == round)
+    }
+
     /// Decide if a witness is famous.
-    pub fn is_witness_famous(&self, _witness: &Hash, rounds: &[Round]) -> Option<bool> {
+    fn is_witness_famous(&self, _witness: &Hash, rounds: &[Round]) -> Option<bool> {
         let authors = rounds[0].authors();
         let threshold = rounds[0].threshold();
         let freq_coin_rounds = rounds[0].freq_coin_rounds() as usize;
@@ -124,7 +213,7 @@ impl<T> Voter<T> {
     }
 
     /// A round is famous when all it's witnesses are famous.
-    pub fn famous_witnesses(&self, rounds: &[Round]) -> Option<Vec<Hash>> {
+    fn famous_witnesses(&self, rounds: &[Round]) -> Option<Vec<Hash>> {
         let witnesses = rounds[0].witnesses();
         let mut famous_witnesses = Vec::with_capacity(witnesses.len());
         for witness in witnesses {
@@ -137,81 +226,5 @@ impl<T> Voter<T> {
             }
         }
         Some(famous_witnesses)
-    }
-
-    /// Iterates through rounds and performs a vote. If the fame of all witnesses
-    /// is decided it calculates the order of events within a round and retires
-    /// the round into history.
-    pub fn process_rounds(&mut self) {
-        /*for (i, round) in  self.rounds.iter().enumerate() {
-            if let Some(_famous_witnesses) = self.famous_witnesses(&self.rounds[i..]) {
-                // TODO order round and retire
-                self.rounds = self.rounds[i..].to_vec();
-            } else {
-                break;
-            }
-        }*/
-    }
-
-    pub fn round(&self, round: u64) -> Option<&Round> {
-        self.rounds.iter().find(|r| r.round == round)
-    }
-
-    pub fn round_mut(&mut self, round: u64) -> Option<&mut Round> {
-        self.rounds.iter_mut().find(|r| r.round == round)
-    }
-}
-
-impl<T: Serialize> Voter<T> {
-    /// The maximum created round of all self parents of x (or 1 if there are none).
-    /// Event x is a witness if x has a greater created round than its self parent.
-    pub fn add_event<F: FnOnce() -> Result<Box<[Author]>, Error>>(
-        &mut self,
-        event: RawEvent<T>,
-        start_round: F,
-    ) -> Result<Hash, Error> {
-        let hash = self.graph.add_event(event)?;
-
-        let parent_round_num = self
-            .graph
-            .parents(self.graph.event(&hash).unwrap())
-            .into_iter()
-            .filter_map(|p| p.round_created())
-            .max()
-            .unwrap_or(0);
-        let parent_round = self.round(parent_round_num);
-
-        let is_witness = if let Some(parent_round) = parent_round {
-            parent_round
-                .witnesses()
-                .into_iter()
-                .filter(|w| self.graph.strongly_see(&hash, w, parent_round.authors()))
-                .nth(parent_round.threshold())
-                .is_some()
-        } else {
-            true
-        };
-
-        let round_num = if is_witness {
-            parent_round_num + 1
-        } else {
-            parent_round_num
-        };
-        if is_witness {
-            if let Some(round) = self.round_mut(round_num) {
-                round.witnesses.push(hash);
-            } else {
-                let mut round = Round::new(round_num, start_round()?);
-                round.witnesses.push(hash);
-                self.rounds.push(round);
-            }
-        }
-
-        let mut event = self.graph.event_mut(&hash).unwrap();
-        event.round_created = Some(round_num);
-        event.witness = Some(round_num > parent_round_num);
-
-        self.process_rounds();
-        Ok(hash)
     }
 }

@@ -10,7 +10,7 @@ use self::checkpoint::ProposedCheckpoint;
 pub use self::checkpoint::{Checkpoint, SignedCheckpoint};
 use self::serde::{Exporter, Importer};
 pub use self::tree::Tree;
-use crate::author::{Author, Signature};
+use crate::author::{Author, Identity, Signature};
 use crate::error::Error;
 use crate::hash::{FileHasher, Hash};
 use ::serde::{Deserialize, Serialize};
@@ -131,12 +131,14 @@ impl State {
         Ok(())
     }
 
-    pub fn start_round(&mut self) -> Result<Box<[Author]>, Error> {
+    pub fn start_round(&mut self) -> Result<(u64, Box<[Author]>), Error> {
         self.authors.start_round()
     }
 
-    pub fn block_hash(&self) -> Option<Hash> {
-        self.authors.hash()
+    pub fn sign_block(&self, identity: &Identity) -> Transaction {
+        Transaction::sign_block(
+            &identity.sign(&*self.authors.hash().expect("proposed block exists")),
+        )
     }
 
     pub async fn export_checkpoint(&mut self, dir: &Path) -> Result<Checkpoint, Error> {
@@ -182,11 +184,11 @@ impl State {
         }
 
         // check the signatures
-        let population = new_authors.authors().len();
+        let population = new_authors.authors.len();
         let threshold = population - population * 2 / 3;
         let mut signees = HashSet::new();
         for sig in &checkpoint.signatures[..] {
-            for author in new_authors.authors().iter() {
+            for author in new_authors.authors.iter() {
                 if signees.contains(author) {
                     continue;
                 }
@@ -212,7 +214,7 @@ impl State {
     fn sign_checkpoint(&mut self, author: Author, sig: Signature) {
         if let Some(mut proposed) = self.proposed.take() {
             proposed.add_sig(author, sig);
-            let population = self.authors.authors().len();
+            let population = self.authors.authors.len();
             let threshold = population - population * 2 / 3;
             if proposed.len() >= threshold {
                 self.checkpoint = Some(proposed.into_signed_checkpoint());
@@ -253,7 +255,8 @@ mod tests {
         let mut state = State::open(path).unwrap();
         state.genesis(set(&ids[..2])).unwrap();
 
-        let authors = state.start_round().unwrap();
+        let (block, authors) = state.start_round().unwrap();
+        assert_eq!(block, 1);
         assert_eq!(authors.len(), 2);
         state
             .commit(
@@ -268,14 +271,15 @@ mod tests {
             )
             .unwrap();
 
-        let authors2 = state.start_round().unwrap();
+        let (block2, authors2) = state.start_round().unwrap();
+        assert_eq!(block2, 1);
         assert_eq!(authors, authors2);
-        let sig = ids[0].sign(&*state.block_hash().unwrap());
         state
-            .commit(ids[0].author(), &Transaction::sign_block(&sig))
+            .commit(ids[0].author(), &state.sign_block(&ids[0]))
             .unwrap();
 
-        let authors3 = state.start_round().unwrap();
+        let (block3, authors3) = state.start_round().unwrap();
+        assert_eq!(block3, 2);
         assert_eq!(authors3.len(), 2);
         assert_ne!(authors3, authors);
     }

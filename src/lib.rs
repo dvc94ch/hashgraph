@@ -59,6 +59,10 @@ impl HashGraph {
         self.state.genesis(genesis_authors)
     }
 
+    pub fn sync_state(&self) -> (u64, Box<[Option<u64>]>) {
+        self.voter.sync_state()
+    }
+
     pub fn add_event(&mut self, event: RawEvent<Transaction>) -> Result<(), Error> {
         let state = &mut self.state;
         let author = event.event.author;
@@ -87,7 +91,7 @@ impl HashGraph {
         .sign(&self.identity)?;
         self.self_hash = Some(hash);
         self.add_event(event)?;
-        Ok(&self.voter.graph.event(&hash).unwrap().raw)
+        Ok(&self.voter.graph().event(&hash).unwrap().raw)
     }
 
     pub fn state_tree(&self) -> Tree {
@@ -127,12 +131,9 @@ mod tests {
         Ok((tmp, g))
     }
 
-    fn link(
-        g: &mut HashGraph,
-        event: &RawEvent<Transaction>,
-    ) -> RawEvent<Transaction> {
+    fn link(g: &mut HashGraph, event: &RawEvent<Transaction>) -> RawEvent<Transaction> {
         if let Err(err) = g.add_event(event.clone()) {
-            println!("{:#?}", g.voter.graph);
+            println!("{:#?}", g.voter.graph());
             println!("{:#?}", event);
             panic!("{}", err);
         }

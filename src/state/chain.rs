@@ -212,7 +212,7 @@ impl ProposedBlock {
 
 pub struct AuthorChain {
     pub(crate) tree: sled::Tree,
-    authors: HashSet<Author>,
+    pub(crate) authors: HashSet<Author>,
     builder: BlockBuilder,
     proposed: Option<ProposedBlock>,
     block: u64,
@@ -260,7 +260,7 @@ impl AuthorChain {
         Ok(())
     }
 
-    pub fn start_round(&mut self) -> Result<Box<[Author]>, Error> {
+    pub fn start_round(&mut self) -> Result<(u64, Box<[Author]>), Error> {
         if let Some(proposed) = self.proposed.take() {
             let population = self.authors.len();
             let threshold = population - population * 2 / 3;
@@ -277,7 +277,7 @@ impl AuthorChain {
         if self.builder.len() > 0 {
             self.proposed = Some(self.builder.to_proposed());
         }
-        Ok(canonicalize_authors(&self.authors))
+        Ok((self.block, canonicalize_authors(&self.authors)))
     }
 
     pub fn genesis_hash(&self) -> Result<Hash, Error> {
@@ -314,10 +314,6 @@ impl AuthorChain {
         if let Some(proposed) = &mut self.proposed {
             proposed.add_sig(author, sig);
         }
-    }
-
-    pub fn authors(&self) -> &HashSet<Author> {
-        &self.authors
     }
 }
 
@@ -370,16 +366,19 @@ mod tests {
         chain.genesis(authors).unwrap();
         chain.add_author(Identity::generate().author(), 1);
         chain.add_author(Identity::generate().author(), 2);
-        let authors = chain.start_round().unwrap();
+        let (block, authors) = chain.start_round().unwrap();
+        assert_eq!(block, 1);
         assert_eq!(authors.len(), 3);
         chain.sign_block(id1.author(), id1.sign(&*chain.hash().unwrap()));
-        let authors = chain.start_round().unwrap();
+        let (block, authors) = chain.start_round().unwrap();
+        assert_eq!(block, 2);
         assert_eq!(authors.len(), 4);
         let genesis = chain.genesis_hash().unwrap();
 
         let mut chain = AuthorChain::from_tree(tree).unwrap();
         assert_eq!(chain.genesis_hash().unwrap(), genesis);
-        let authors2 = chain.start_round().unwrap();
+        let (block2, authors2) = chain.start_round().unwrap();
+        assert_eq!(block, block2);
         assert_eq!(authors, authors2);
     }
 }

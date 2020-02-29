@@ -9,6 +9,7 @@ use std::collections::HashMap;
 /// Gossip graph.
 #[derive(Debug, Default)]
 pub struct Graph<T> {
+    state: HashMap<Author, u64>,
     events: HashMap<Hash, Event<T>>,
 }
 
@@ -174,6 +175,7 @@ impl<T> Graph<T> {
     pub fn new() -> Self {
         Self {
             events: Default::default(),
+            state: Default::default(),
         }
     }
 
@@ -207,10 +209,22 @@ impl<T: Serialize> Graph<T> {
         if let Some(parent) = &event.event.other_hash {
             self.events.get(parent).ok_or(Error::InvalidEvent)?;
         }
+        let author = event.event.author;
         let hash = event.event.hash()?;
-        event.event.author.verify(&*hash, &event.signature)?;
+        author.verify(&*hash, &event.signature)?;
         let event = Event::new(event, hash, seq);
         self.events.insert(hash, event);
+        self.state.insert(author, seq);
         Ok(hash)
+    }
+}
+
+impl<T> Graph<T> {
+    pub fn sync_state(&self, authors: &[Author]) -> Box<[Option<u64>]> {
+        authors
+            .iter()
+            .map(|author| self.state.get(author).cloned())
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
     }
 }
