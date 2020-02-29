@@ -7,10 +7,21 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 /// Gossip graph.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Graph<T> {
     state: HashMap<Author, u64>,
     events: HashMap<Hash, Event<T>>,
+    root: Option<Hash>,
+}
+
+impl<T> Default for Graph<T> {
+    fn default() -> Self {
+        Self {
+            state: Default::default(),
+            events: Default::default(),
+            root: Default::default(),
+        }
+    }
 }
 
 // Parents and ancestors
@@ -172,13 +183,6 @@ impl<T> Graph<T> {
 }
 
 impl<T> Graph<T> {
-    pub fn new() -> Self {
-        Self {
-            events: Default::default(),
-            state: Default::default(),
-        }
-    }
-
     /// Retrieves an event from the graph.
     pub fn event(&self, hash: &Hash) -> Option<&Event<T>> {
         self.events.get(hash)
@@ -215,6 +219,7 @@ impl<T: Serialize> Graph<T> {
         let event = Event::new(event, hash, seq);
         self.events.insert(hash, event);
         self.state.insert(author, seq);
+        self.root = Some(hash);
         Ok(hash)
     }
 }
@@ -226,5 +231,25 @@ impl<T> Graph<T> {
             .map(|author| self.state.get(author).cloned())
             .collect::<Vec<_>>()
             .into_boxed_slice()
+    }
+
+    pub fn sync<'a>(
+        &self,
+        state: HashMap<Author, u64>,
+    ) -> Option<impl Iterator<Item = &RawEvent<T>>> {
+        self.root.as_ref().map(|root| {
+            self.ancestors(self.event(root).expect("invalid state"))
+                .take_while(|event| {
+                    if let Some(seq) = state.get(&event.author()) {
+                        event.seq() != *seq
+                    } else {
+                        true
+                    }
+                })
+                .map(|event| &event.raw)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+        })
     }
 }

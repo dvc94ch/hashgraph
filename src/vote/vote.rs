@@ -73,12 +73,12 @@ pub struct Voter<T> {
     rounds: Vec<Round>,
 }
 
-impl<T> Voter<T> {
-    /// Creates a new voter.
-    pub fn new() -> Self {
+impl<T: Serialize> Voter<T> {
+    pub fn new(block: u64, authors: Box<[Author]>) -> Self {
+        let round = Round::new(0, block, authors);
         Self {
-            graph: Graph::new(),
-            rounds: Vec::new(),
+            graph: Graph::default(),
+            rounds: vec![round],
         }
     }
 
@@ -91,18 +91,22 @@ impl<T> Voter<T> {
         (round.block, self.graph.sync_state(&round.authors))
     }
 
-    /// Iterates through rounds and performs a vote. If the fame of all witnesses
-    /// is decided it calculates the order of events within a round and retires
-    /// the round into history.
-    pub fn process_rounds(&mut self) {
-        /*for (i, round) in  self.rounds.iter().enumerate() {
-            if let Some(_famous_witnesses) = self.famous_witnesses(&self.rounds[i..]) {
-                // TODO order round and retire
-                self.rounds = self.rounds[i..].to_vec();
-            } else {
-                break;
-            }
-        }*/
+    pub fn sync(
+        &self,
+        state: (u64, Box<[Option<u64>]>),
+    ) -> Result<Option<impl Iterator<Item = &RawEvent<T>>>, Error> {
+        let (block, seq) = state;
+        let authors = self
+            .rounds
+            .iter()
+            .find(|r| r.block == block)
+            .map(|r| &r.authors)
+            .ok_or(Error::InvalidSync)?
+            .iter()
+            .zip(seq.into_iter())
+            .filter_map(|(author, seq)| seq.map(|seq| (*author, seq)))
+            .collect();
+        Ok(self.graph.sync(authors))
     }
 }
 
@@ -226,5 +230,19 @@ impl<T> Voter<T> {
             }
         }
         Some(famous_witnesses)
+    }
+
+    /// Iterates through rounds and performs a vote. If the fame of all witnesses
+    /// is decided it calculates the order of events within a round and retires
+    /// the round into history.
+    pub fn process_rounds(&mut self) {
+        /*for (i, round) in  self.rounds.iter().enumerate() {
+            if let Some(_famous_witnesses) = self.famous_witnesses(&self.rounds[i..]) {
+                // TODO order round and retire
+                self.rounds = self.rounds[i..].to_vec();
+            } else {
+                break;
+            }
+        }*/
     }
 }

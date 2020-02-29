@@ -43,8 +43,9 @@ impl HashGraph {
     pub async fn open(dir: &Path) -> Result<Self, Error> {
         fs::create_dir_all(&dir).await?;
         let identity = Identity::load_from(&dir.join("identity")).await?;
-        let state = State::open(dir)?;
-        let voter = Voter::new();
+        let mut state = State::open(dir)?;
+        let (block, authors) = state.start_round()?;
+        let voter = Voter::new(block, authors);
         Ok(Self {
             identity,
             state,
@@ -59,39 +60,54 @@ impl HashGraph {
         self.state.genesis(genesis_authors)
     }
 
-    pub fn sync_state(&self) -> (u64, Box<[Option<u64>]>) {
-        self.voter.sync_state()
-    }
-
-    pub fn add_event(&mut self, event: RawEvent<Transaction>) -> Result<(), Error> {
-        let state = &mut self.state;
-        let author = event.event.author;
-        let hash = self.voter.add_event(event, || state.start_round())?;
-        if author != self.identity() {
-            self.other_hash = Some(hash);
-        }
-        Ok(())
-    }
-
     pub fn create_transaction(&mut self, tx: Transaction) {
         self.queue.push(tx);
     }
 
-    pub fn create_event(&mut self) -> Result<&RawEvent<Transaction>, Error> {
+    pub fn sync_state(&self) -> (u64, Box<[Option<u64>]>) {
+        self.voter.sync_state()
+    }
+
+    pub fn outbound_sync(
+        &self,
+        state: (u64, Box<[Option<u64>]>),
+    ) -> Result<Option<impl Iterator<Item = &RawEvent<Transaction>>>, Error> {
+        self.voter.sync(state)
+    }
+
+    pub fn inbound_sync(
+        &mut self,
+        events: impl Iterator<Item = RawEvent<Transaction>>,
+    ) -> Result<(), Error> {
+        let identity = self.identity();
+        let state = &mut self.state;
+
+        // Import events.
+        for event in events {
+            let author = event.event.author;
+            let hash = self.voter.add_event(event, || state.start_round())?;
+            if author != identity {
+                self.other_hash = Some(hash);
+            }
+        }
+
+        // Create sync event.
         let payload = std::mem::replace(&mut self.queue, Vec::new()).into_boxed_slice();
         let time = SystemTime::now();
-        let author = self.identity();
         let (hash, event) = UnsignedRawEvent {
             self_hash: self.self_hash.take(),
             other_hash: self.other_hash,
             payload,
             time,
-            author,
+            author: identity,
         }
         .sign(&self.identity)?;
         self.self_hash = Some(hash);
-        self.add_event(event)?;
-        Ok(&self.voter.graph().event(&hash).unwrap().raw)
+        self.voter.add_event(event, || state.start_round())?;
+
+        // Process new events
+        self.voter.process_rounds();
+        Ok(())
     }
 
     pub fn state_tree(&self) -> Tree {
@@ -116,71 +132,103 @@ mod tests {
     use super::*;
     use tempdir::TempDir;
 
-    async fn create_graphs(n: usize) -> Result<(Vec<TempDir>, Vec<HashGraph>), Error> {
+    async fn create_graphs(n: usize) -> Result<(Vec<TempDir>, Vec<Option<HashGraph>>), Error> {
         let mut tmp = Vec::with_capacity(n);
         let mut g = Vec::with_capacity(n);
         let mut authors = HashSet::new();
         for i in 0..n {
             tmp.push(TempDir::new(&format!("hashgraph{}", n))?);
-            g.push(HashGraph::open(tmp[i].path().into()).await?);
-            authors.insert(g[i].identity());
+            let graph = HashGraph::open(tmp[i].path().into()).await?;
+            authors.insert(graph.identity());
+            g.push(Some(graph));
         }
         for i in 0..n {
-            g[i].genesis(authors.clone())?;
+            g[i].as_mut().unwrap().genesis(authors.clone())?;
         }
         Ok((tmp, g))
     }
 
-    fn link(g: &mut HashGraph, event: &RawEvent<Transaction>) -> RawEvent<Transaction> {
-        if let Err(err) = g.add_event(event.clone()) {
-            println!("{:#?}", g.voter.graph());
-            println!("{:#?}", event);
+    fn sync(g1: &mut HashGraph, g2: &HashGraph) {
+        let state = g1.sync_state();
+        let res = if let Some(iter) = g2.outbound_sync(state).unwrap() {
+            g1.inbound_sync(iter.map(|r| r.clone()))
+        } else {
+            g1.inbound_sync(core::iter::empty())
+        };
+        if let Err(err) = res {
+            println!("{:#?}", g1.voter.graph());
             panic!("{}", err);
         }
-        g.create_event().unwrap().clone()
     }
 
     #[allow(unused_variables)]
     #[async_std::test]
     async fn consensus() {
         let (_tmp, mut g) = create_graphs(4).await.unwrap();
+        let mut a = g[0].take().unwrap();
+        let mut b = g[1].take().unwrap();
+        let mut c = g[2].take().unwrap();
+        let mut d = g[3].take().unwrap();
 
-        let a1 = g[0].create_event().unwrap().clone();
-        let b1 = g[1].create_event().unwrap().clone();
-        let c1 = g[2].create_event().unwrap().clone();
-        let d1 = g[3].create_event().unwrap().clone();
-
-        let d11 = link(&mut g[3], &b1);
-        let b11 = link(&mut g[1], &d11);
-        let a11 = link(&mut g[0], &b11);
-        let b12 = link(&mut g[1], &c1);
-        let d12 = link(&mut g[3], &b11);
-        let d13 = link(&mut g[3], &b12);
-        let b13 = link(&mut g[1], &d13);
-        let c11 = link(&mut g[2], &b12);
-
-        let d2 = link(&mut g[3], &a11);
-        let a2 = link(&mut g[0], &d2);
-        let a21 = link(&mut g[0], &c11);
-        let b2 = link(&mut g[1], &d2);
-        let c2 = link(&mut g[2], &a21);
-        let a22 = link(&mut g[0], &b2);
-        let d21 = link(&mut g[3], &b2);
-        let d22 = link(&mut g[3], &a22);
-        let b21 = link(&mut g[1], &a22);
-
-        let b3 = link(&mut g[1], &d22);
-        let a3 = link(&mut g[0], &b3);
-        let b31 = link(&mut g[1], &a3);
-        let b32 = link(&mut g[1], &a3);
-        let d3 = link(&mut g[3], &b3);
-        let d31 = link(&mut g[3], &c2);
-        let b33 = link(&mut g[1], &d31);
-        let a31 = link(&mut g[0], &b32);
-        let a32 = link(&mut g[0], &b33);
-        let b34 = link(&mut g[1], &a32);
-        let c3 = link(&mut g[2], &d31);
-        let d32 = link(&mut g[3], &b33);
-        let d4 = link(&mut g[3], &c3);
+        /* D1.1 -> B1.0 */
+        sync(&mut d, &b);
+        /* B1.1 -> D1.1 */
+        sync(&mut b, &d);
+        /* D1.2 -> B1.1 */
+        sync(&mut d, &b);
+        /* B1.2 -> C1.0 */
+        sync(&mut b, &c);
+        /* A1.1 -> B1.1 */
+        sync(&mut a, &b);
+        /* D1.3 -> B1.2 */
+        sync(&mut d, &b);
+        /* C1.1 -> B1.2 */
+        sync(&mut c, &b);
+        /* B1.3 -> D1.3 */
+        sync(&mut b, &d);
+        /* D2.0 -> A1.1 */
+        sync(&mut d, &a);
+        /* A2.0 -> D2.0 */
+        sync(&mut a, &d);
+        /* B2.0 -> D2.0 */
+        sync(&mut b, &d);
+        /* A2.1 -> C1.1 */
+        sync(&mut a, &c);
+        /* A2.2 -> B2.0 */
+        sync(&mut a, &b);
+        /* C2.0 -> A2.1 */
+        sync(&mut c, &a);
+        /* D2.1 -> B2.0 */
+        sync(&mut d, &b);
+        /* D2.2 -> A2.2 */
+        sync(&mut d, &a);
+        /* B2.1 -> A2.2 */
+        sync(&mut b, &a);
+        /* B3.0 -> D2.2 */
+        sync(&mut b, &d);
+        /* A3.0 -> B3.0 */
+        sync(&mut a, &b);
+        /* D3.0 -> B3.0 */
+        sync(&mut d, &b);
+        /* B3.1 -> A3.0 */
+        sync(&mut b, &a);
+        /* A3.1 -> B3.1 */
+        sync(&mut a, &b);
+        /* D3.1 -> C2.0 */
+        sync(&mut d, &c);
+        /* C3.0 -> D3.1 */
+        sync(&mut c, &d);
+        /* B3.2 -> D3.1 */
+        sync(&mut b, &d);
+        /* A3.2 -> B3.2 */
+        sync(&mut a, &b);
+        /* D3.2 -> B3.2 */
+        sync(&mut d, &b);
+        /* B3.3 -> A3.2 */
+        sync(&mut b, &a);
+        /* D4.0 -> C3.0 */
+        sync(&mut d, &c);
+        /* B4.0 -> D4.0 */
+        sync(&mut b, &d);
     }
 }

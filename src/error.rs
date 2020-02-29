@@ -13,6 +13,8 @@ pub enum Error {
     InvalidBlock,
     #[error("Invalid event")]
     InvalidEvent,
+    #[error("Invalid sync")]
+    InvalidSync,
 
     #[error("Config directory was not found")]
     ConfigDir,
