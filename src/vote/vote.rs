@@ -74,16 +74,19 @@ pub struct Voter<T> {
 }
 
 impl<T: Serialize> Voter<T> {
-    pub fn new(block: u64, authors: Box<[Author]>) -> Self {
-        let round = Round::new(0, block, authors);
+    pub fn new() -> Self {
         Self {
             graph: Graph::default(),
-            rounds: vec![round],
+            rounds: Default::default(),
         }
     }
 
     pub fn graph(&self) -> &Graph<T> {
         &self.graph
+    }
+
+    pub fn rounds(&self) -> &[Round] {
+        &self.rounds
     }
 
     pub fn sync_state(&self) -> (u64, Box<[Option<u64>]>) {
@@ -94,7 +97,7 @@ impl<T: Serialize> Voter<T> {
     pub fn sync(
         &self,
         state: (u64, Box<[Option<u64>]>),
-    ) -> Result<Option<impl Iterator<Item = &RawEvent<T>>>, Error> {
+    ) -> Result<impl Iterator<Item = &RawEvent<T>>, Error> {
         let (block, seq) = state;
         let authors = self
             .rounds
@@ -158,7 +161,7 @@ impl<T: Serialize> Voter<T> {
 
         let mut event = self.graph.event_mut(&hash).unwrap();
         event.round_created = Some(round_num);
-        event.witness = Some(round_num > parent_round_num);
+        event.witness = Some(is_witness);
         Ok(hash)
     }
 }

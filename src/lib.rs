@@ -43,9 +43,8 @@ impl HashGraph {
     pub async fn open(dir: &Path) -> Result<Self, Error> {
         fs::create_dir_all(&dir).await?;
         let identity = Identity::load_from(&dir.join("identity")).await?;
-        let mut state = State::open(dir)?;
-        let (block, authors) = state.start_round()?;
-        let voter = Voter::new(block, authors);
+        let state = State::open(dir)?;
+        let voter = Voter::new();
         Ok(Self {
             identity,
             state,
@@ -71,14 +70,14 @@ impl HashGraph {
     pub fn outbound_sync(
         &self,
         state: (u64, Box<[Option<u64>]>),
-    ) -> Result<Option<impl Iterator<Item = &RawEvent<Transaction>>>, Error> {
+    ) -> Result<impl Iterator<Item = &RawEvent<Transaction>>, Error> {
         self.voter.sync(state)
     }
 
     pub fn inbound_sync(
         &mut self,
         events: impl Iterator<Item = RawEvent<Transaction>>,
-    ) -> Result<(), Error> {
+    ) -> Result<Hash, Error> {
         let identity = self.identity();
         let state = &mut self.state;
 
@@ -103,11 +102,11 @@ impl HashGraph {
         }
         .sign(&self.identity)?;
         self.self_hash = Some(hash);
-        self.voter.add_event(event, || state.start_round())?;
+        let hash = self.voter.add_event(event, || state.start_round())?;
 
         // Process new events
         self.voter.process_rounds();
-        Ok(())
+        Ok(hash)
     }
 
     pub fn state_tree(&self) -> Tree {
@@ -142,93 +141,124 @@ mod tests {
             authors.insert(graph.identity());
             g.push(Some(graph));
         }
+        g.sort_by(|a, b| {
+            a.as_ref()
+                .unwrap()
+                .identity()
+                .cmp(&b.as_ref().unwrap().identity())
+        });
         for i in 0..n {
             g[i].as_mut().unwrap().genesis(authors.clone())?;
         }
         Ok((tmp, g))
     }
 
-    fn sync(g1: &mut HashGraph, g2: &HashGraph) {
+    fn sync_check(
+        authors: &[Author],
+        g1: &mut HashGraph,
+        g2: &HashGraph,
+        round: u64,
+        witness: bool,
+    ) -> Hash {
         let state = g1.sync_state();
-        let res = if let Some(iter) = g2.outbound_sync(state).unwrap() {
-            g1.inbound_sync(iter.map(|r| r.clone()))
-        } else {
-            g1.inbound_sync(core::iter::empty())
-        };
-        if let Err(err) = res {
-            println!("{:#?}", g1.voter.graph());
-            panic!("{}", err);
+        println!("{:?} -> {:?}", state.1, g2.sync_state().1);
+        g1.voter.graph().display(authors);
+        println!("");
+        g2.voter.graph().display(authors);
+        println!("");
+        let iter = g2.outbound_sync(state).unwrap();
+        let hash = g1.inbound_sync(iter.map(|r| r.clone())).unwrap();
+
+        g1.voter.graph().display(authors);
+        println!("");
+
+        println!("{:#?}", g1.voter.rounds());
+        let event = g1.voter.graph().event(&hash).expect("hash is in graph");
+        let event_round = event.round_created().unwrap();
+        let event_witness = event.witness().unwrap();
+        if (event_round, event_witness) != (round, witness) {
+            assert_eq!((event_round, event_witness), (round, witness));
         }
+        hash
     }
 
     #[allow(unused_variables)]
     #[async_std::test]
     async fn consensus() {
         let (_tmp, mut g) = create_graphs(4).await.unwrap();
+        let authors: Vec<_> = g.iter().map(|g| g.as_ref().unwrap().identity()).collect();
         let mut a = g[0].take().unwrap();
         let mut b = g[1].take().unwrap();
         let mut c = g[2].take().unwrap();
         let mut d = g[3].take().unwrap();
 
+        /* A1.0 -> Genesis */
+        a.inbound_sync(core::iter::empty()).unwrap();
+        /* B1.0 -> Genesis */
+        b.inbound_sync(core::iter::empty()).unwrap();
+        /* C1.0 -> Genesis */
+        c.inbound_sync(core::iter::empty()).unwrap();
+        /* D1.0 -> Genesis */
+        d.inbound_sync(core::iter::empty()).unwrap();
         /* D1.1 -> B1.0 */
-        sync(&mut d, &b);
+        sync_check(&authors, &mut d, &b, 1, false);
         /* B1.1 -> D1.1 */
-        sync(&mut b, &d);
+        sync_check(&authors, &mut b, &d, 1, false);
         /* D1.2 -> B1.1 */
-        sync(&mut d, &b);
-        /* B1.2 -> C1.0 */
-        sync(&mut b, &c);
+        sync_check(&authors, &mut d, &b, 1, false);
         /* A1.1 -> B1.1 */
-        sync(&mut a, &b);
+        sync_check(&authors, &mut a, &b, 1, false);
+        /* B1.2 -> C1.0 */
+        sync_check(&authors, &mut b, &c, 1, false);
         /* D1.3 -> B1.2 */
-        sync(&mut d, &b);
+        sync_check(&authors, &mut d, &b, 1, false);
         /* C1.1 -> B1.2 */
-        sync(&mut c, &b);
+        sync_check(&authors, &mut c, &b, 1, false);
         /* B1.3 -> D1.3 */
-        sync(&mut b, &d);
+        sync_check(&authors, &mut b, &d, 1, false);
         /* D2.0 -> A1.1 */
-        sync(&mut d, &a);
+        sync_check(&authors, &mut d, &a, 2, true);
         /* A2.0 -> D2.0 */
-        sync(&mut a, &d);
+        sync_check(&authors, &mut a, &d, 2, true);
         /* B2.0 -> D2.0 */
-        sync(&mut b, &d);
+        sync_check(&authors, &mut b, &d, 2, true);
         /* A2.1 -> C1.1 */
-        sync(&mut a, &c);
-        /* A2.2 -> B2.0 */
-        sync(&mut a, &b);
+        sync_check(&authors, &mut a, &c, 2, false);
+        /*/* A2.2 -> B2.0 */
+        sync_check(&mut a, &b, 2, false);
         /* C2.0 -> A2.1 */
-        sync(&mut c, &a);
+        sync_check(&mut c, &a, 2, true);
         /* D2.1 -> B2.0 */
-        sync(&mut d, &b);
+        sync_check(&mut d, &b, 2, false);
         /* D2.2 -> A2.2 */
-        sync(&mut d, &a);
+        sync_check(&mut d, &a, 2, false);
         /* B2.1 -> A2.2 */
-        sync(&mut b, &a);
+        sync_check(&mut b, &a, 2, false);
         /* B3.0 -> D2.2 */
-        sync(&mut b, &d);
+        sync_check(&mut b, &d, 3, true);
         /* A3.0 -> B3.0 */
-        sync(&mut a, &b);
+        sync_check(&mut a, &b, 3, true);
         /* D3.0 -> B3.0 */
-        sync(&mut d, &b);
+        sync_check(&mut d, &b, 3, true);
         /* B3.1 -> A3.0 */
-        sync(&mut b, &a);
+        sync_check(&mut b, &a, 3, false);
         /* A3.1 -> B3.1 */
-        sync(&mut a, &b);
+        sync_check(&mut a, &b, 3, false);
         /* D3.1 -> C2.0 */
-        sync(&mut d, &c);
+        sync_check(&mut d, &c, 3, false);
         /* C3.0 -> D3.1 */
-        sync(&mut c, &d);
+        sync_check(&mut c, &d, 3, true);
         /* B3.2 -> D3.1 */
-        sync(&mut b, &d);
+        sync_check(&mut b, &d, 3, false);
         /* A3.2 -> B3.2 */
-        sync(&mut a, &b);
+        sync_check(&mut a, &b, 3, false);
         /* D3.2 -> B3.2 */
-        sync(&mut d, &b);
+        sync_check(&mut d, &b, 3, false);
         /* B3.3 -> A3.2 */
-        sync(&mut b, &a);
+        sync_check(&mut b, &a, 3, false);
         /* D4.0 -> C3.0 */
-        sync(&mut d, &c);
+        sync_check(&mut d, &c, 4, true);
         /* B4.0 -> D4.0 */
-        sync(&mut b, &d);
+        sync_check(&mut b, &d, 4, true);*/
     }
 }

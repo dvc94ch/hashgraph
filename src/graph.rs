@@ -4,7 +4,7 @@ use crate::error::Error;
 use crate::event::{Event, RawEvent};
 use crate::hash::Hash;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Gossip graph.
 #[derive(Debug)]
@@ -47,7 +47,8 @@ impl<T> Graph<T> {
     pub fn ancestors<'a>(&'a self, event: &'a Event<T>) -> AncestorIter<'a, T> {
         AncestorIter {
             graph: self,
-            stack: vec![Box::new(vec![event].into_iter())],
+            stack: vec![event],
+            visited: HashSet::new(),
         }
     }
 
@@ -77,26 +78,24 @@ impl<T> Graph<T> {
 /// Iterator of ancestors.
 pub struct AncestorIter<'a, T> {
     graph: &'a Graph<T>,
-    stack: Vec<Box<dyn Iterator<Item = &'a Event<T>> + 'a>>,
+    stack: Vec<&'a Event<T>>,
+    visited: HashSet<Hash>,
 }
 
 impl<'a, T> Iterator for AncestorIter<'a, T> {
     type Item = &'a Event<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(iter) = self.stack.last_mut() {
-                if let Some(event) = iter.next() {
-                    let parents = self.graph.parents(event);
-                    self.stack
-                        .push(Box::new(parents.into_iter().map(Into::into)));
-                    return Some(event);
-                } else {
-                    self.stack.pop();
+        if let Some(event) = self.stack.pop() {
+            self.visited.insert(*event.hash());
+            for parent in self.graph.parents(event) {
+                if !self.visited.contains(parent.hash()) {
+                    self.stack.push(parent);
                 }
-            } else {
-                return None;
             }
+            Some(event)
+        } else {
+            None
         }
     }
 }
@@ -236,20 +235,66 @@ impl<T> Graph<T> {
     pub fn sync<'a>(
         &self,
         state: HashMap<Author, u64>,
-    ) -> Option<impl Iterator<Item = &RawEvent<T>>> {
-        self.root.as_ref().map(|root| {
-            self.ancestors(self.event(root).expect("invalid state"))
-                .take_while(|event| {
-                    if let Some(seq) = state.get(&event.author()) {
-                        event.seq() != *seq
-                    } else {
-                        true
-                    }
-                })
-                .map(|event| &event.raw)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-        })
+    ) -> impl Iterator<Item = &RawEvent<T>> {
+        let mut stack = vec![];
+        let mut gray = vec![];
+        let mut black = HashSet::new();
+        let mut post_order = vec![];
+        if let Some(root) = self.root.as_ref() {
+            stack.push(self.event(root).unwrap());
+        }
+        while let Some(event) = stack.pop() {
+            if black.contains(&event.hash()) {
+                continue;
+            }
+            if event.seq() <= state.get(&event.author()).cloned().unwrap_or(0) {
+                black.insert(event.hash());
+                continue;
+            }
+            for parent in self.parents(event) {
+                if !black.contains(&parent.hash()) {
+                    gray.push(parent);
+                }
+            }
+            if gray.is_empty() {
+                black.insert(event.hash());
+                post_order.push(event);
+            } else {
+                stack.push(event);
+                for e in gray.drain(..) {
+                    stack.push(e);
+                }
+            }
+        }
+        post_order.into_iter().map(|e| &e.raw)
+    }
+
+    pub fn display(&self, authors: &[Author]) {
+        let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let names: HashMap<_, _> = authors.into_iter().zip(alphabet.chars()).collect();
+        if let Some(root) = &self.root {
+            let event = self.event(root).unwrap();
+            for event in self.ancestors(event) {
+                let other_parent = event
+                    .raw
+                    .event
+                    .other_hash
+                    .as_ref()
+                    .map(|hash| self.event(hash).unwrap());
+                let name = names.get(&event.author()).unwrap();
+                if let Some(other_parent) = other_parent {
+                    let other_name = names.get(&other_parent.author()).unwrap();
+                    println!(
+                        "{}.{} -> {}.{}",
+                        name,
+                        event.seq(),
+                        other_name,
+                        other_parent.seq(),
+                    );
+                } else {
+                    println!("{}.{} -> None", name, event.seq(),);
+                }
+            }
+        }
     }
 }
