@@ -21,6 +21,8 @@ pub struct Round {
     freq_coin_rounds: usize,
     /// Witnesses
     witnesses: Vec<Hash>,
+    /// If the fame of all witnesses is decided.
+    decided: bool,
 }
 
 impl Round {
@@ -32,6 +34,7 @@ impl Round {
             authors,
             witnesses,
             freq_coin_rounds: FREQ_COIN_ROUNDS,
+            decided: false,
         }
     }
 
@@ -182,42 +185,40 @@ impl<T> Voter<T> {
     }
 
     /// Decide if a witness is famous.
-    fn is_witness_famous(&self, _witness: &Hash, rounds: &[Round]) -> Option<bool> {
-        let authors = rounds[0].authors();
-        let threshold = rounds[0].threshold();
-        let freq_coin_rounds = rounds[0].freq_coin_rounds() as usize;
-        for diff in 1..rounds.len() {
-            for wy in rounds[diff].witnesses() {
-                let _strongly_seen_witnesses = rounds[diff - 1]
-                    .witnesses()
-                    .into_iter()
-                    .filter(|w| self.graph.strongly_see(wy, w, authors));
+    fn is_witness_famous(&self, round: &Round, _witness: &Hash, voters: WitnessIter) -> Option<bool> {
+        let threshold = round.threshold();
+        for (voter, round, diff) in voters {
+            let parent_round = self.round(round.round - 1).unwrap();
+            let _strongly_seen_witnesses = parent_round
+                .witnesses()
+                .into_iter()
+                .filter(|w| self.graph.strongly_see(voter, w, parent_round.authors()));
 
-                // TODO majority vote in strongly_seen_witnesses (is true for a tie)
-                let vote = false;
-                // TODO number of events in s with a vote of v
-                let num_votes = 0;
+            // TODO majority vote in strongly_seen_witnesses (is true for a tie)
+            let vote = false;
+            // TODO number of events in s with a vote of v
+            let num_votes = 0;
 
-                if diff == 1 { // first round of the election
-                     // TODO y.vote <- can y see x
+            if diff == 1 {
+                // first round of the election
+                 // TODO y.vote <- can y see x
+            } else {
+                if diff % round.freq_coin_rounds() > 0 {
+                    // this is a normal round
+                    if num_votes > threshold {
+                        // decide
+                        // TODO wx.famous = vote
+                        // TODO wy.vote = vote
+                        return Some(vote);
+                    }
                 } else {
-                    if diff % freq_coin_rounds > 0 {
-                        // this is a normal round
-                        if num_votes > threshold {
-                            // decide
-                            // TODO wx.famous = vote
-                            // TODO wy.vote = vote
-                            return Some(vote);
-                        }
+                    // this is a coin round
+                    if num_votes > threshold {
+                        // vote
+                        // wy.vote = vote
                     } else {
-                        // this is a coin round
-                        if num_votes > threshold {
-                            // vote
-                            // wy.vote = vote
-                        } else {
-                            // flip a coin
-                            // TODO wy.vote = f(wy.signature())
-                        }
+                        // flip a coin
+                        // TODO wy.vote = f(wy.signature())
                     }
                 }
             }
@@ -226,32 +227,70 @@ impl<T> Voter<T> {
     }
 
     /// A round is famous when all it's witnesses are famous.
-    fn famous_witnesses(&self, rounds: &[Round]) -> Option<Vec<Hash>> {
-        let witnesses = rounds[0].witnesses();
-        let mut famous_witnesses = Vec::with_capacity(witnesses.len());
-        for witness in witnesses {
-            if let Some(famous) = self.is_witness_famous(witness, rounds) {
-                if famous {
-                    famous_witnesses.push(*witness);
-                }
+    fn decide_fame(&mut self, i: usize) -> bool {
+        let round = &self.rounds[i];
+        for witness in round.witnesses() {
+            let voters = WitnessIter::new(&self.rounds[i..]);
+            if let Some(fame) = self.is_witness_famous(round, witness, voters) {
+                self.graph.event_mut(witness).unwrap().famous = Some(fame);
             } else {
-                return None;
+                return false;
             }
         }
-        Some(famous_witnesses)
+        true
     }
 
     /// Iterates through rounds and performs a vote. If the fame of all witnesses
     /// is decided it calculates the order of events within a round and retires
     /// the round into history.
     pub fn process_rounds(&mut self) {
-        /*for (i, round) in  self.rounds.iter().enumerate() {
-            if let Some(_famous_witnesses) = self.famous_witnesses(&self.rounds[i..]) {
-                // TODO order round and retire
-                self.rounds = self.rounds[i..].to_vec();
+        for i in 0..self.rounds.len() {
+            if self.rounds[i].decided {
+                continue;
+            }
+            let decided = self.decide_fame(i);
+            if decided {
+                self.rounds[i].decided = decided
             } else {
                 break;
             }
-        }*/
+        }
+    }
+}
+
+struct WitnessIter<'a> {
+    rounds: &'a [Round],
+    ri: usize,
+    wi: usize,
+}
+
+impl<'a> WitnessIter<'a> {
+    pub fn new(rounds: &'a [Round]) -> Self {
+        Self {
+            rounds,
+            ri: 1,
+            wi: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for WitnessIter<'a> {
+    type Item = (&'a Hash, &'a Round, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(round) = self.rounds.get(self.ri) {
+                if let Some(witness) = round.witnesses.get(self.wi) {
+                    self.wi += 1;
+                    return Some((witness, &self.rounds[self.ri], self.ri));
+                } else {
+                    self.ri += 1;
+                    self.wi = 0;
+                    continue;
+                }
+            } else {
+                return None;
+            }
+        }
     }
 }
