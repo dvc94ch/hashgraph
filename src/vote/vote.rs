@@ -2,8 +2,8 @@
 use crate::author::Author;
 use crate::error::Error;
 use crate::event::RawEvent;
-use crate::graph::Graph;
 use crate::hash::Hash;
+use crate::vote::graph::Graph;
 use serde::Serialize;
 
 const FREQ_COIN_ROUNDS: usize = 10;

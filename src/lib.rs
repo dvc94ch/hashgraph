@@ -5,7 +5,6 @@
 mod author;
 mod error;
 mod event;
-mod graph;
 mod hash;
 mod state;
 mod vote;
@@ -193,13 +192,13 @@ mod tests {
         let mut d = g[3].take().unwrap();
 
         /* A1.0 -> Genesis */
-        a.inbound_sync(core::iter::empty()).unwrap();
+        let a1 = a.inbound_sync(core::iter::empty()).unwrap();
         /* B1.0 -> Genesis */
-        b.inbound_sync(core::iter::empty()).unwrap();
+        let b1 = b.inbound_sync(core::iter::empty()).unwrap();
         /* C1.0 -> Genesis */
-        c.inbound_sync(core::iter::empty()).unwrap();
+        let c1 = c.inbound_sync(core::iter::empty()).unwrap();
         /* D1.0 -> Genesis */
-        d.inbound_sync(core::iter::empty()).unwrap();
+        let d1 = d.inbound_sync(core::iter::empty()).unwrap();
         /* D1.1 -> B1.0 */
         sync_check(&authors, &mut d, &b, 1, false);
         /* B1.1 -> D1.1 */
@@ -217,17 +216,17 @@ mod tests {
         /* B1.3 -> D1.3 */
         sync_check(&authors, &mut b, &d, 1, false);
         /* D2.0 -> A1.1 */
-        sync_check(&authors, &mut d, &a, 2, true);
+        let d2 = sync_check(&authors, &mut d, &a, 2, true);
         /* A2.0 -> D2.0 */
-        sync_check(&authors, &mut a, &d, 2, true);
+        let a2 = sync_check(&authors, &mut a, &d, 2, true);
         /* B2.0 -> D2.0 */
-        sync_check(&authors, &mut b, &d, 2, true);
+        let b2 = sync_check(&authors, &mut b, &d, 2, true);
         /* A2.1 -> C1.1 */
         sync_check(&authors, &mut a, &c, 2, false);
         /* A2.2 -> B2.0 */
         sync_check(&authors, &mut a, &b, 2, false);
         /* C2.0 -> A2.1 */
-        sync_check(&authors, &mut c, &a, 2, true);
+        let c2 = sync_check(&authors, &mut c, &a, 2, true);
         /* D2.1 -> B2.0 */
         sync_check(&authors, &mut d, &b, 2, false);
         /* D2.2 -> A2.2 */
@@ -260,5 +259,27 @@ mod tests {
         sync_check(&authors, &mut d, &c, 4, true);
         /* B4.0 -> D4.0 */
         sync_check(&authors, &mut b, &d, 4, true);
+
+        let graphs = [
+            a.voter.graph(),
+            b.voter.graph(),
+            c.voter.graph(),
+            d.voter.graph(),
+        ];
+        let famous = [
+            (a1, true),
+            (b1, true),
+            (c1, true),
+            (d1, true),
+            (a2, true),
+            (b2, true),
+            (c2, false),
+            (d2, true),
+        ];
+        for (h, f) in &famous {
+            for g in &graphs {
+                assert_eq!(g.event(h).unwrap().famous, Some(*f));
+            }
+        }
     }
 }
