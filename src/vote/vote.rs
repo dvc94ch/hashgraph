@@ -184,60 +184,65 @@ impl<T> Voter<T> {
         self.rounds.iter_mut().find(|r| r.round == round)
     }
 
-    /// Decide if a witness is famous.
-    fn is_witness_famous(&self, round: &Round, _witness: &Hash, voters: WitnessIter) -> Option<bool> {
+    /// A round is decided when the fame of all it's witnesses is decided.
+    fn decide_fame(&mut self, i: usize) -> bool {
+        let round = &self.rounds[i];
         let threshold = round.threshold();
-        for (voter, round, diff) in voters {
-            let parent_round = self.round(round.round - 1).unwrap();
-            let _strongly_seen_witnesses = parent_round
-                .witnesses()
-                .into_iter()
-                .filter(|w| self.graph.strongly_see(voter, w, parent_round.authors()));
-
-            // TODO majority vote in strongly_seen_witnesses (is true for a tie)
-            let vote = false;
-            // TODO number of events in s with a vote of v
-            let num_votes = 0;
-
-            if diff == 1 {
-                // first round of the election
-                 // TODO y.vote <- can y see x
-            } else {
-                if diff % round.freq_coin_rounds() > 0 {
-                    // this is a normal round
-                    if num_votes > threshold {
-                        // decide
-                        // TODO wx.famous = vote
-                        // TODO wy.vote = vote
-                        return Some(vote);
-                    }
+        let mut num_decided = 0;
+        for witness in round.witnesses() {
+            if self.graph.event(witness).unwrap().famous.is_some() {
+                num_decided += 1;
+                continue;
+            }
+            for (voter, round, diff) in WitnessIter::new(&self.rounds[i..]) {
+                if diff == 1 {
+                    // first round of the election
+                    let vote = self.graph.see(voter, witness);
+                    self.graph
+                        .event_mut(voter)
+                        .unwrap()
+                        .votes
+                        .insert(*witness, vote);
                 } else {
-                    // this is a coin round
+                    let parent_round = self.round(round.round - 1).unwrap();
+                    let strongly_seen_witnesses = parent_round
+                        .witnesses()
+                        .into_iter()
+                        .filter(|w| self.graph.strongly_see(voter, w, parent_round.authors()));
+                    // majority vote in strongly_seen_witnesses (is true for a tie)
+                    // number of events in s with a vote of v
+                    let (mut vote, num_votes) = {
+                        let votes = strongly_seen_witnesses
+                            .filter_map(|w| {
+                                self.graph.event(w).unwrap().votes.get(witness).cloned()
+                            })
+                            .collect::<Vec<_>>();
+                        let num_votes = votes.len();
+                        let yes_votes = votes.into_iter().filter(|v| *v == true).count();
+                        let no_votes = num_votes - yes_votes;
+                        (yes_votes >= no_votes, usize::max(yes_votes, no_votes))
+                    };
+
+                    if num_votes <= threshold && diff % round.freq_coin_rounds() > 0 {
+                        // this is a coin round so flip a coin
+                        vote = self.graph.event(voter).unwrap().signature().to_bytes()[32] & 1 == 1
+                    }
+
+                    self.graph
+                        .event_mut(voter)
+                        .unwrap()
+                        .votes
+                        .insert(*witness, vote);
+                    //println!("num_votes {}, threshold {}", num_votes, threshold);
                     if num_votes > threshold {
-                        // vote
-                        // wy.vote = vote
-                    } else {
-                        // flip a coin
-                        // TODO wy.vote = f(wy.signature())
+                        self.graph.event_mut(witness).unwrap().famous = Some(vote);
+                        num_decided += 1;
                     }
                 }
             }
         }
-        None
-    }
-
-    /// A round is famous when all it's witnesses are famous.
-    fn decide_fame(&mut self, i: usize) -> bool {
-        let round = &self.rounds[i];
-        for witness in round.witnesses() {
-            let voters = WitnessIter::new(&self.rounds[i..]);
-            if let Some(fame) = self.is_witness_famous(round, witness, voters) {
-                self.graph.event_mut(witness).unwrap().famous = Some(fame);
-            } else {
-                return false;
-            }
-        }
-        true
+        //println!("round: {} num decided: {}", round.round, num_decided);
+        num_decided == round.authors().len()
     }
 
     /// Iterates through rounds and performs a vote. If the fame of all witnesses

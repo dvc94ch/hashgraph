@@ -153,25 +153,25 @@ mod tests {
     }
 
     fn sync_check(
-        authors: &[Author],
+        _authors: &[Author],
         g1: &mut HashGraph,
         g2: &HashGraph,
         round: u64,
         witness: bool,
     ) -> Hash {
         let state = g1.sync_state();
-        println!("{:?} -> {:?}", state.1, g2.sync_state().1);
-        g1.voter.graph().display(authors);
-        println!("");
-        g2.voter.graph().display(authors);
-        println!("");
+        //println!("{:?} -> {:?}", state.1, g2.sync_state().1);
+        //g1.voter.graph().display(authors);
+        //println!("");
+        //g2.voter.graph().display(authors);
+        //println!("");
         let iter = g2.outbound_sync(state).unwrap();
         let hash = g1.inbound_sync(iter.map(|r| r.clone())).unwrap();
 
-        g1.voter.graph().display(authors);
-        println!("");
+        //g1.voter.graph().display(authors);
+        //println!("");
 
-        println!("{:#?}", g1.voter.rounds());
+        //println!("{:#?}", g1.voter.rounds());
         let event = g1.voter.graph().event(&hash).expect("hash is in graph");
         let event_round = event.round_created().unwrap();
         let event_witness = event.witness().unwrap();
@@ -261,9 +261,9 @@ mod tests {
         sync_check(&authors, &mut b, &d, 4, true);
 
         let graphs = [
-            a.voter.graph(),
+            //a.voter.graph(),
             b.voter.graph(),
-            c.voter.graph(),
+            //c.voter.graph(),
             d.voter.graph(),
         ];
         let famous = [
@@ -276,7 +276,8 @@ mod tests {
             (c2, false),
             (d2, true),
         ];
-        for (h, f) in &famous {
+        for (i, (h, f)) in famous.iter().enumerate() {
+            println!("checking fame of {}", i);
             for g in &graphs {
                 assert_eq!(g.event(h).unwrap().famous, Some(*f));
             }

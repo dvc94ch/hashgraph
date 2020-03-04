@@ -3,6 +3,7 @@ use crate::author::{Author, Identity, Signature};
 use crate::error::Error;
 use crate::hash::{Hash, Hasher, GENESIS_HASH};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// An unsigned raw hashgraph event.
@@ -78,6 +79,8 @@ pub struct Event<T> {
     pub(crate) round_created: Option<u64>,
     /// Is first event of a new round.
     pub(crate) witness: Option<bool>,
+    /// Votes
+    pub(crate) votes: HashMap<Hash, bool>,
     /// Is the witness famous.
     pub(crate) famous: Option<bool>,
     /// The round the event was received.
@@ -104,6 +107,7 @@ impl<T: Serialize> Event<T> {
             children: vec![],
             round_created: None,
             witness: None,
+            votes: Default::default(),
             famous: None,
             round_received: None,
             time_received: None,
