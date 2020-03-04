@@ -29,18 +29,27 @@ impl<T> Graph<T> {
     /// Set of parents of an event.
     pub fn parents(&self, event: &Event<T>) -> Vec<&Event<T>> {
         event
-            .parent_hashes()
+            .parents()
             .into_iter()
-            .filter_map(|mh| self.events.get(mh))
+            .filter_map(|h| self.events.get(h))
             .collect()
     }
 
     /// Self parent of an event.
     pub fn self_parent(&self, event: &Event<T>) -> Option<&Event<T>> {
         event
-            .self_parent_hash()
-            .map(|mh| self.events.get(mh))
+            .self_parent()
+            .map(|h| self.events.get(h))
             .unwrap_or_default()
+    }
+
+    /// Set of children of an event.
+    pub fn children(&self, event: &Event<T>) -> Vec<&Event<T>> {
+        event
+            .children()
+            .into_iter()
+            .filter_map(|h| self.events.get(h))
+            .collect()
     }
 
     /// Returns an iterator of an events ancestors.
@@ -72,6 +81,15 @@ impl<T> Graph<T> {
         self.self_ancestors(x)
             .find(|e| e.hash() == y.hash())
             .is_some()
+    }
+
+    /// Returns an iterator of an events decendants.
+    pub fn decendants<'a>(&'a self, event: &'a Event<T>) -> DecendantIter<'a, T> {
+        DecendantIter {
+            graph: self,
+            stack: vec![event],
+            visited: HashSet::new(),
+        }
     }
 }
 
@@ -121,6 +139,31 @@ impl<'a, T> Iterator for SelfAncestorIter<'a, T> {
     }
 }
 
+/// Iterator of decendants.
+pub struct DecendantIter<'a, T> {
+    graph: &'a Graph<T>,
+    stack: Vec<&'a Event<T>>,
+    visited: HashSet<Hash>,
+}
+
+impl<'a, T> Iterator for DecendantIter<'a, T> {
+    type Item = &'a Event<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(event) = self.stack.pop() {
+            self.visited.insert(*event.hash());
+            for child in self.graph.children(event) {
+                if !self.visited.contains(child.hash()) {
+                    self.stack.push(child);
+                }
+            }
+            Some(event)
+        } else {
+            None
+        }
+    }
+}
+
 // seeing
 impl<T> Graph<T> {
     /// Event x sees y if y is an ancestor of x, but no fork of y is an
@@ -130,7 +173,7 @@ impl<T> Graph<T> {
         let mut is_ancestor = false;
         let mut created = Vec::new();
         for ancestor in self.ancestors(x) {
-            if !is_ancestor && ancestor.hash() == y.hash() {
+            if ancestor.hash() == y.hash() {
                 is_ancestor = true;
             }
             if ancestor.author() == y.author() {
@@ -154,30 +197,36 @@ impl<T> Graph<T> {
     /// each of which sees y.
     pub fn strongly_see(&self, x: &Hash, y: &Hash, authors: &[Author]) -> bool {
         let (x, y) = (self.event(x).unwrap(), self.event(y).unwrap());
-        let ay: Vec<_> = authors
+        let y: Vec<_> = authors
             .iter()
             .map(|author| {
-                self.ancestors(y)
-                    .find(|ancestor| ancestor.author() == *author)
+                self.decendants(y)
+                    .filter(|ancestor| ancestor.author() == *author)
                     .map(|ancestor| ancestor.seq())
-                    .unwrap_or(1)
+                    .min()
             })
             .collect();
-        let ax: Vec<_> = authors
+        let x: Vec<_> = authors
             .iter()
             .map(|author| {
                 self.ancestors(x)
-                    // TODO more efficient traversal
-                    .collect::<Vec<_>>()
-                    .iter()
-                    .rev()
-                    .find(|ancestor| ancestor.author() == *author)
+                    .filter(|ancestor| ancestor.author() == *author)
                     .map(|ancestor| ancestor.seq())
-                    .unwrap_or(1)
+                    .max()
             })
             .collect();
-        let number_of_authors_see = ay.into_iter().zip(ax).filter(|(y, x)| y >= x).count();
-        number_of_authors_see > 2 * authors.len() / 3
+        let number_of_authors_see = y
+            .into_iter()
+            .zip(x)
+            .filter(|(y, x)| {
+                if let (Some(y), Some(x)) = (y, x) {
+                    x >= y
+                } else {
+                    false
+                }
+            })
+            .count();
+        number_of_authors_see >= authors.len() - authors.len() / 3
     }
 }
 
@@ -216,6 +265,9 @@ impl<T: Serialize> Graph<T> {
         let hash = event.event.hash()?;
         author.verify(&*hash, &event.signature)?;
         let event = Event::new(event, hash, seq);
+        for parent in event.parents() {
+            self.events.get_mut(parent).unwrap().add_child(hash);
+        }
         self.events.insert(hash, event);
         self.state.insert(author, seq);
         self.root = Some(hash);
@@ -232,10 +284,7 @@ impl<T> Graph<T> {
             .into_boxed_slice()
     }
 
-    pub fn sync<'a>(
-        &self,
-        state: HashMap<Author, u64>,
-    ) -> impl Iterator<Item = &RawEvent<T>> {
+    pub fn sync<'a>(&self, state: HashMap<Author, u64>) -> impl Iterator<Item = &RawEvent<T>> {
         let mut stack = vec![];
         let mut gray = vec![];
         let mut black = HashSet::new();
@@ -296,5 +345,57 @@ impl<T> Graph<T> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::author::Identity;
+    use crate::event::{RawEvent, UnsignedRawEvent};
+    use std::time::SystemTime;
+
+    fn raw_event(id: &Identity, self_hash: Option<Hash>, other_hash: Option<Hash>) -> RawEvent<()> {
+        UnsignedRawEvent {
+            payload: vec![].into_boxed_slice(),
+            self_hash,
+            other_hash,
+            time: SystemTime::now(),
+            author: id.author(),
+        }
+        .sign(id)
+        .unwrap()
+        .1
+    }
+
+    #[test]
+    fn test_see() {
+        let a1 = Identity::generate();
+        let a2 = Identity::generate();
+        let mut g = Graph::default();
+        let e1 = raw_event(&a1, None, None);
+        let h1 = g.add_event(e1).unwrap();
+        let e2 = raw_event(&a2, None, Some(h1));
+        let h2 = g.add_event(e2).unwrap();
+        assert!(!g.see(&h1, &h2));
+        assert!(g.see(&h2, &h1));
+    }
+
+    #[test]
+    fn test_strongly_see() {
+        let a = Identity::generate();
+        let b = Identity::generate();
+        let c = Identity::generate();
+        let authors = [a.author(), b.author(), c.author()];
+        let mut g = Graph::default();
+        let a1 = raw_event(&a, None, None);
+        let ha1 = g.add_event(a1).unwrap();
+        let b1 = raw_event(&b, None, Some(ha1));
+        let hb1 = g.add_event(b1).unwrap();
+        let c1 = raw_event(&c, None, Some(hb1));
+        let hc1 = g.add_event(c1).unwrap();
+        let a2 = raw_event(&a, Some(ha1), Some(hc1));
+        let ha2 = g.add_event(a2).unwrap();
+        assert!(g.strongly_see(&ha2, &ha1, &authors));
     }
 }

@@ -72,6 +72,8 @@ pub struct Event<T> {
     seq: u64,
     /// A list of hashes of the event's parents, self-parent first.
     parents: Vec<Hash>,
+    /// A list of hashes of the event's children.
+    children: Vec<Hash>,
     /// The round the event was created.
     pub(crate) round_created: Option<u64>,
     /// Is first event of a new round.
@@ -99,6 +101,7 @@ impl<T: Serialize> Event<T> {
             hash,
             seq,
             parents,
+            children: vec![],
             round_created: None,
             witness: None,
             famous: None,
@@ -115,13 +118,23 @@ impl<T> Event<T> {
     }
 
     /// Set of hashes of parents of an event.
-    pub fn parent_hashes(&self) -> &[Hash] {
+    pub fn parents(&self) -> &[Hash] {
         &self.parents
     }
 
     /// Hash of the self parent of an event.
-    pub fn self_parent_hash(&self) -> Option<&Hash> {
+    pub fn self_parent(&self) -> Option<&Hash> {
         self.raw.event.self_hash.as_ref()
+    }
+
+    /// Set of hashes of children of an event.
+    pub fn children(&self) -> &[Hash] {
+        &self.children
+    }
+
+    /// Add a child hash.
+    pub fn add_child(&mut self, hash: Hash) {
+        self.children.push(hash);
     }
 
     /// Author's claimed data and time of the event.

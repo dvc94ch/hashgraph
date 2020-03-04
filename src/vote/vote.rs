@@ -121,33 +121,39 @@ impl<T: Serialize> Voter<T> {
         event: RawEvent<T>,
         start_round: F,
     ) -> Result<Hash, Error> {
+        let parent = event.event.self_hash;
+        let other_parent = event.event.other_hash;
         let hash = self.graph.add_event(event)?;
 
-        let parent_round_num = self
-            .graph
-            .parents(self.graph.event(&hash).unwrap())
-            .into_iter()
-            .filter_map(|p| p.round_created())
-            .max()
+        let parent_round_num = parent
+            .map(|h| self.graph.event(&h).unwrap().round_created().unwrap())
             .unwrap_or(0);
-        let parent_round = self.round(parent_round_num);
+        let other_parent_round_num = other_parent
+            .map(|h| self.graph.event(&h).unwrap().round_created().unwrap())
+            .unwrap_or(0);
+        let max_parent_round_num = u64::max(parent_round_num, other_parent_round_num);
 
-        let is_witness = if let Some(parent_round) = parent_round {
-            parent_round
-                .witnesses()
-                .into_iter()
-                .filter(|w| self.graph.strongly_see(&hash, w, parent_round.authors()))
-                .nth(parent_round.threshold())
-                .is_some()
+        let parent_round = self.round(max_parent_round_num);
+
+        let next_round = parent_round
+            .map(|r| {
+                let n_strongly_see = r
+                    .witnesses()
+                    .into_iter()
+                    .filter(|w| self.graph.strongly_see(&hash, w, r.authors()))
+                    .count();
+                n_strongly_see > r.threshold()
+            })
+            .unwrap_or(true);
+
+        let round_num = if next_round {
+            max_parent_round_num + 1
         } else {
-            true
+            max_parent_round_num
         };
 
-        let round_num = if is_witness {
-            parent_round_num + 1
-        } else {
-            parent_round_num
-        };
+        let is_witness = round_num > parent_round_num;
+
         if is_witness {
             if let Some(round) = self.round_mut(round_num) {
                 round.witnesses.push(hash);

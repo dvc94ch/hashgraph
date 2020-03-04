@@ -224,41 +224,41 @@ mod tests {
         sync_check(&authors, &mut b, &d, 2, true);
         /* A2.1 -> C1.1 */
         sync_check(&authors, &mut a, &c, 2, false);
-        /*/* A2.2 -> B2.0 */
-        sync_check(&mut a, &b, 2, false);
+        /* A2.2 -> B2.0 */
+        sync_check(&authors, &mut a, &b, 2, false);
         /* C2.0 -> A2.1 */
-        sync_check(&mut c, &a, 2, true);
+        sync_check(&authors, &mut c, &a, 2, true);
         /* D2.1 -> B2.0 */
-        sync_check(&mut d, &b, 2, false);
+        sync_check(&authors, &mut d, &b, 2, false);
         /* D2.2 -> A2.2 */
-        sync_check(&mut d, &a, 2, false);
+        sync_check(&authors, &mut d, &a, 2, false);
         /* B2.1 -> A2.2 */
-        sync_check(&mut b, &a, 2, false);
+        sync_check(&authors, &mut b, &a, 2, false);
         /* B3.0 -> D2.2 */
-        sync_check(&mut b, &d, 3, true);
+        sync_check(&authors, &mut b, &d, 3, true);
         /* A3.0 -> B3.0 */
-        sync_check(&mut a, &b, 3, true);
+        sync_check(&authors, &mut a, &b, 3, true);
         /* D3.0 -> B3.0 */
-        sync_check(&mut d, &b, 3, true);
+        sync_check(&authors, &mut d, &b, 3, true);
         /* B3.1 -> A3.0 */
-        sync_check(&mut b, &a, 3, false);
+        sync_check(&authors, &mut b, &a, 3, false);
         /* A3.1 -> B3.1 */
-        sync_check(&mut a, &b, 3, false);
+        sync_check(&authors, &mut a, &b, 3, false);
         /* D3.1 -> C2.0 */
-        sync_check(&mut d, &c, 3, false);
+        sync_check(&authors, &mut d, &c, 3, false);
         /* C3.0 -> D3.1 */
-        sync_check(&mut c, &d, 3, true);
+        sync_check(&authors, &mut c, &d, 3, true);
         /* B3.2 -> D3.1 */
-        sync_check(&mut b, &d, 3, false);
+        sync_check(&authors, &mut b, &d, 3, false);
         /* A3.2 -> B3.2 */
-        sync_check(&mut a, &b, 3, false);
+        sync_check(&authors, &mut a, &b, 3, false);
         /* D3.2 -> B3.2 */
-        sync_check(&mut d, &b, 3, false);
+        sync_check(&authors, &mut d, &b, 3, false);
         /* B3.3 -> A3.2 */
-        sync_check(&mut b, &a, 3, false);
+        sync_check(&authors, &mut b, &a, 3, false);
         /* D4.0 -> C3.0 */
-        sync_check(&mut d, &c, 4, true);
+        sync_check(&authors, &mut d, &c, 4, true);
         /* B4.0 -> D4.0 */
-        sync_check(&mut b, &d, 4, true);*/
+        sync_check(&authors, &mut b, &d, 4, true);
     }
 }
