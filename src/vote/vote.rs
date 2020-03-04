@@ -5,6 +5,7 @@ use crate::event::RawEvent;
 use crate::hash::Hash;
 use crate::vote::graph::Graph;
 use serde::Serialize;
+use std::collections::HashMap;
 
 const FREQ_COIN_ROUNDS: usize = 10;
 
@@ -23,11 +24,14 @@ pub struct Round {
     witnesses: Vec<Hash>,
     /// If the fame of all witnesses is decided.
     decided: bool,
+    /// Unique famous witnesses
+    unique_famous_witnesses: Vec<Hash>,
 }
 
 impl Round {
     pub fn new(round: u64, block: u64, authors: Box<[Author]>) -> Self {
         let witnesses = Vec::with_capacity(authors.len());
+        let unique_famous_witnesses = Vec::with_capacity(authors.len());
         Self {
             round,
             block,
@@ -35,6 +39,7 @@ impl Round {
             witnesses,
             freq_coin_rounds: FREQ_COIN_ROUNDS,
             decided: false,
+            unique_famous_witnesses,
         }
     }
 
@@ -255,7 +260,24 @@ impl<T> Voter<T> {
             }
             let decided = self.decide_fame(i);
             if decided {
-                self.rounds[i].decided = decided
+                self.rounds[i].decided = decided;
+                let witnesses = self.rounds[i].witnesses();
+                let mut authors = HashMap::new();
+                for witness in witnesses {
+                    let event = self.graph.event(witness).unwrap();
+                    let num_witnesses = authors.get(&event.author()).cloned().unwrap_or(0);
+                    authors.insert(event.author(), num_witnesses + 1);
+                }
+                let mut unique_famous_witnesses = Vec::new();
+                for witness in witnesses {
+                    let event = self.graph.event(witness).unwrap();
+                    let num_witnesses = *authors.get(&event.author()).unwrap();
+                    if num_witnesses > 1 {
+                        continue;
+                    }
+                    unique_famous_witnesses.push(*witness);
+                }
+                self.rounds[i].unique_famous_witnesses = unique_famous_witnesses;
             } else {
                 break;
             }
