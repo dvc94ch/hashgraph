@@ -66,7 +66,7 @@ impl Transaction {
 }
 
 pub struct State {
-    _db: sled::Db,
+    db: sled::Db,
     authors: AuthorChain,
     state: Acl,
     checkpoint: Option<SignedCheckpoint>,
@@ -79,7 +79,7 @@ impl State {
         let authors = AuthorChain::from_tree(db.open_tree("authors")?)?;
         let state = Acl::from_tree(db.open_tree("state")?);
         Ok(Self {
-            _db: db,
+            db,
             authors,
             state,
             checkpoint: None,
@@ -223,6 +223,11 @@ impl State {
             }
         }
     }
+
+    pub fn flush(&self) -> Result<(), Error> {
+        self.db.flush()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -245,6 +250,19 @@ mod tests {
             set.insert(id.author());
         }
         set
+    }
+
+    #[test]
+    fn test_insert() {
+        let ids = gen_ids(1);
+        let tmpdir = TempDir::new("test_insert").unwrap();
+        let path: &Path = tmpdir.path().into();
+        let mut state = State::open(path).unwrap();
+        state.genesis(set(&ids)).unwrap();
+        state.commit(ids[0].author(), &Transaction::insert(b"key", b"value")).unwrap();
+        assert_eq!(state.state_tree().len(), 1);
+        let value = state.state_tree().get(b"key").unwrap().unwrap();
+        assert_eq!(&value, &b"value"[..]);
     }
 
     #[test]

@@ -117,16 +117,21 @@ impl<'a, T> Iterator for AncestorIter<'a, T> {
     type Item = &'a Event<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(event) = self.stack.pop() {
-            self.visited.insert(*event.hash());
-            for parent in self.graph.parents(event) {
-                if !self.visited.contains(parent.hash()) {
-                    self.stack.push(parent);
+        loop {
+            if let Some(event) = self.stack.pop() {
+                if self.visited.contains(event.hash()) {
+                    continue;
                 }
+                self.visited.insert(*event.hash());
+                for parent in self.graph.parents(event) {
+                    if !self.visited.contains(parent.hash()) {
+                        self.stack.push(parent);
+                    }
+                }
+                return Some(event);
+            } else {
+                return None;
             }
-            Some(event)
-        } else {
-            None
         }
     }
 }
@@ -142,7 +147,7 @@ impl<'a, T> Iterator for SelfAncestorIter<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_event = if let Some(event) = self.event.as_ref() {
-            self.graph.self_parent(*event).map(Into::into)
+            self.graph.self_parent(*event)
         } else {
             None
         };

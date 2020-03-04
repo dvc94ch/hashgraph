@@ -265,17 +265,19 @@ impl<T> Voter<T> {
             }
         }
         //println!("round: {} num decided: {}", round.round, num_decided);
-        num_decided == round.authors().len()
+        num_decided >= round.authors().len()
     }
 
     /// Iterates through rounds and performs a vote. If the fame of all witnesses
     /// is decided it finalizes the round.
     pub fn process_rounds(&mut self) -> Vec<Hash> {
+        //println!("process_rounds");
         let mut commit = Vec::new();
         for i in 0..self.rounds.len() {
             if self.rounds[i].decided {
                 continue;
             }
+            //println!("decide fame of round {}", self.rounds[i].round);
             if self.decide_fame(i) {
                 let graph = &self.graph;
                 let round = &mut self.rounds[i];
@@ -294,9 +296,9 @@ impl<T> Voter<T> {
                 for root in &roots[1..] {
                     whitener = xor(&whitener, &root.signature().to_bytes());
                 }
-                println!("round decided");
-                println!("unique_famous_witnesses: {:?}", roots.len());
-                println!("shared ancestors: {:?}", hashes);
+                //println!("round decided");
+                //println!("unique_famous_witnesses: {:?}", roots.len());
+                //println!("shared ancestors: {:?}", hashes.len());
                 for h in &hashes {
                     let round = &self.rounds[i];
                     let event = self.graph.event(h).unwrap();
@@ -332,6 +334,7 @@ impl<T> Voter<T> {
             }
         }
         let mut events = commit.into_iter().map(|h| self.graph.event(&h).unwrap()).collect::<Vec<_>>();
+        //println!("committing {} events", events.len());
         events.sort();
         events.into_iter().map(|e| *e.hash()).collect()
     }

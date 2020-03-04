@@ -105,13 +105,14 @@ impl HashGraph {
 
         // Process new events
         for hash in self.voter.process_rounds() {
-            println!("commit: {:?}", hash);
+            //println!("commit: {:?}", hash);
             let event = self.voter.graph().event(&hash).unwrap();
             let author = event.author();
             for payload in event.payload() {
-                println!("commit: {:?}", payload);
+                //println!("commit: {:?}", payload);
                 self.state.commit(author, payload)?;
             }
+            self.state.flush()?;
         }
         Ok(hash)
     }
@@ -303,9 +304,13 @@ mod tests {
                 assert_eq!(g.event(h).unwrap().famous, Some(*f));
             }
         }
-        check_key(&b, &a.identity(), 2);
-        check_key(&b, &b.identity(), 3);
-        check_key(&b, &c.identity(), 1);
+
+        check_key(&b, &a.identity(), 1);
+        check_key(&b, &b.identity(), 2);
         check_key(&b, &d.identity(), 4);
+
+        check_key(&d, &a.identity(), 1);
+        check_key(&d, &b.identity(), 2);
+        check_key(&d, &d.identity(), 4);
     }
 }
