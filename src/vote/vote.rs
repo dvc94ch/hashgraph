@@ -72,6 +72,24 @@ impl Round {
     pub fn witnesses(&self) -> &[Hash] {
         &self.witnesses
     }
+
+    fn decide_round<T>(&mut self, graph: &Graph<T>) {
+        self.decided = true;
+        let mut authors = HashMap::new();
+        for witness in self.witnesses() {
+            let event = graph.event(witness).unwrap();
+            let num_witnesses = authors.get(&event.author()).cloned().unwrap_or(0);
+            authors.insert(event.author(), num_witnesses + 1);
+        }
+        for witness in &self.witnesses {
+            let event = graph.event(witness).unwrap();
+            let num_witnesses = *authors.get(&event.author()).unwrap();
+            if num_witnesses > 1 {
+                continue;
+            }
+            self.unique_famous_witnesses.push(*witness);
+        }
+    }
 }
 
 /// Voter splits events into rounds and orders them into a globally agreed
@@ -251,37 +269,71 @@ impl<T> Voter<T> {
     }
 
     /// Iterates through rounds and performs a vote. If the fame of all witnesses
-    /// is decided it calculates the order of events within a round and retires
-    /// the round into history.
-    pub fn process_rounds(&mut self) {
+    /// is decided it finalizes the round.
+    pub fn process_rounds(&mut self) -> Vec<Hash> {
+        let mut commit = Vec::new();
         for i in 0..self.rounds.len() {
             if self.rounds[i].decided {
                 continue;
             }
-            let decided = self.decide_fame(i);
-            if decided {
-                self.rounds[i].decided = decided;
-                let witnesses = self.rounds[i].witnesses();
-                let mut authors = HashMap::new();
-                for witness in witnesses {
-                    let event = self.graph.event(witness).unwrap();
-                    let num_witnesses = authors.get(&event.author()).cloned().unwrap_or(0);
-                    authors.insert(event.author(), num_witnesses + 1);
+            if self.decide_fame(i) {
+                let graph = &self.graph;
+                let round = &mut self.rounds[i];
+                round.decide_round(graph);
+                let roots = round
+                    .unique_famous_witnesses
+                    .iter()
+                    .map(|e| graph.event(e).unwrap())
+                    .collect::<Vec<_>>();
+                let hashes = graph
+                    .shared_ancestors(&roots)
+                    .filter(|e| e.round_received.is_none())
+                    .map(|e| *e.hash())
+                    .collect::<Vec<_>>();
+                let mut whitener = roots[0].signature().to_bytes();
+                for root in &roots[1..] {
+                    whitener = xor(&whitener, &root.signature().to_bytes());
                 }
-                let mut unique_famous_witnesses = Vec::new();
-                for witness in witnesses {
-                    let event = self.graph.event(witness).unwrap();
-                    let num_witnesses = *authors.get(&event.author()).unwrap();
-                    if num_witnesses > 1 {
-                        continue;
+                println!("round decided");
+                println!("unique_famous_witnesses: {:?}", roots.len());
+                println!("shared ancestors: {:?}", hashes);
+                for h in &hashes {
+                    let round = &self.rounds[i];
+                    let event = self.graph.event(h).unwrap();
+
+                    let mut timestamps = Vec::with_capacity(round.unique_famous_witnesses.len());
+                    for witness in &round.unique_famous_witnesses {
+                        let witness = self.graph.event(witness).unwrap();
+                        let timestamp = self.graph.self_ancestors(witness).find(|ancestor| {
+                            let next_ancestor = ancestor
+                                .self_parent()
+                                .map(|e| self.graph.event(e).unwrap());
+                            self.graph.ancestor(ancestor, event) &&
+                            next_ancestor
+                                .map(|ancestor| !self.graph.ancestor(ancestor, event))
+                                .unwrap_or(true)
+                        })
+                        .map(|e| e.time())
+                        .unwrap();
+                        timestamps.push(*timestamp);
                     }
-                    unique_famous_witnesses.push(*witness);
+                    timestamps.sort();
+                    let time_received = timestamps[timestamps.len() / 2];
+                    let whitened_signature = xor(&whitener, &event.signature().to_bytes());
+
+                    let mut event = self.graph.event_mut(h).unwrap();
+                    event.round_received = Some(round.round);
+                    event.time_received = Some(time_received);
+                    event.whitened_signature = Some(whitened_signature);
+                    commit.push(*event.hash());
                 }
-                self.rounds[i].unique_famous_witnesses = unique_famous_witnesses;
             } else {
                 break;
             }
         }
+        let mut events = commit.into_iter().map(|h| self.graph.event(&h).unwrap()).collect::<Vec<_>>();
+        events.sort();
+        events.into_iter().map(|e| *e.hash()).collect()
     }
 }
 
@@ -320,4 +372,12 @@ impl<'a> Iterator for WitnessIter<'a> {
             }
         }
     }
+}
+
+fn xor(x: &[u8; 64], y: &[u8; 64]) -> [u8; 64] {
+    let mut n = [0; 64];
+    for i in 0..x.len() {
+        n[i] = x[i] ^ y[i];
+    }
+    n
 }

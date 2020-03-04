@@ -91,6 +91,19 @@ impl<T> Graph<T> {
             visited: HashSet::new(),
         }
     }
+
+    /// Returns an iterator over shared ancestors of a list of events.
+    pub fn shared_ancestors<'a>(&'a self, events: &'a [&'a Event<T>]) -> SharedAncestorIter<'a, T> {
+        SharedAncestorIter {
+            graph: self,
+            ancestors: AncestorIter {
+                graph: self,
+                stack: vec![events[0]],
+                visited: HashSet::new(),
+            },
+            events: &events[1..],
+        }
+    }
 }
 
 /// Iterator of ancestors.
@@ -160,6 +173,37 @@ impl<'a, T> Iterator for DecendantIter<'a, T> {
             Some(event)
         } else {
             None
+        }
+    }
+}
+
+/// Iterator of shared ancestors.
+pub struct SharedAncestorIter<'a, T> {
+    graph: &'a Graph<T>,
+    ancestors: AncestorIter<'a, T>,
+    events: &'a [&'a Event<T>],
+}
+
+impl<'a, T> Iterator for SharedAncestorIter<'a, T> {
+    type Item = &'a Event<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(event) = self.ancestors.next() {
+                let mut not_ancestor = false;
+                for root in self.events {
+                    if !self.graph.ancestor(root, event) {
+                        not_ancestor = true;
+                        break;
+                    }
+                }
+                if not_ancestor {
+                    continue;
+                }
+                return Some(event);
+            } else {
+                return None;
+            }
         }
     }
 }

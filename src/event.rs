@@ -2,6 +2,8 @@
 use crate::author::{Author, Identity, Signature};
 use crate::error::Error;
 use crate::hash::{Hash, Hasher, GENESIS_HASH};
+use core::cmp::Ordering;
+use disco::ed25519::SIGNATURE_LENGTH;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -63,7 +65,7 @@ pub struct RawEvent<T> {
 }
 
 /// A hashgraph event.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Event<T> {
     /// Raw event
     pub(crate) raw: RawEvent<T>,
@@ -87,6 +89,26 @@ pub struct Event<T> {
     pub(crate) round_received: Option<u64>,
     /// The consensus timestamp of the event.
     pub(crate) time_received: Option<SystemTime>,
+    /// The whitened signature of the event.
+    pub(crate) whitened_signature: Option<[u8; SIGNATURE_LENGTH]>,
+}
+
+impl<T> core::fmt::Debug for Event<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("Event")
+            .field("self_hash", &self.raw.event.self_hash)
+            .field("other_hash", &self.raw.event.other_hash)
+            .field("time", &self.raw.event.time)
+            .field("author", &self.raw.event.author)
+            .field("hash", &self.hash)
+            .field("seq", &self.seq)
+            .field("round_created", &self.round_created)
+            .field("witness", &self.witness)
+            .field("famous", &self.famous)
+            .field("round_received", &self.round_received)
+            .field("time_received", &self.time_received)
+            .finish()
+    }
 }
 
 impl<T: Serialize> Event<T> {
@@ -111,6 +133,7 @@ impl<T: Serialize> Event<T> {
             famous: None,
             round_received: None,
             time_received: None,
+            whitened_signature: None,
         }
     }
 }
@@ -174,5 +197,43 @@ impl<T> Event<T> {
     /// Is it the first event of a round.
     pub fn witness(&self) -> Option<bool> {
         self.witness
+    }
+}
+
+impl<T> PartialEq for Event<T> {
+    fn eq(&self, other: &Event<T>) -> bool {
+        self.signature() == other.signature()
+    }
+}
+
+impl<T> Eq for Event<T> {}
+
+impl<T> PartialOrd for Event<T> {
+    fn partial_cmp(&self, other: &Event<T>) -> Option<Ordering> {
+        if let (Some(rr1), Some(rr2)) = (self.round_received, other.round_received) {
+            if rr1 != rr2 {
+                return Some(rr1.cmp(&rr2));
+            }
+        } else {
+            return None;
+        }
+        if let (Some(tr1), Some(tr2)) = (self.time_received, other.time_received) {
+            if tr1 != tr2 {
+                return Some(tr1.cmp(&tr2));
+            }
+        } else {
+            return None;
+        }
+        if let (Some(wsig1), Some(wsig2)) = (self.whitened_signature, other.whitened_signature) {
+            Some(wsig1.cmp(&wsig2))
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> Ord for Event<T> {
+    fn cmp(&self, other: &Event<T>) -> Ordering {
+        self.partial_cmp(other).unwrap()
     }
 }
