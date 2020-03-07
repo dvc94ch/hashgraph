@@ -16,7 +16,7 @@ use crate::event::UnsignedRawEvent;
 pub use crate::event::{Event, RawEvent};
 pub use crate::hash::Hash;
 use crate::state::State;
-pub use crate::state::{SignedCheckpoint, Transaction, Tree};
+pub use crate::state::{Key, SignedCheckpoint, Transaction, Tree, Value};
 use crate::vote::Voter;
 use async_std::fs;
 use async_std::path::{Path, PathBuf};
@@ -169,7 +169,9 @@ mod tests {
         round: u64,
         witness: bool,
     ) -> Hash {
-        g1.create_transaction(Transaction::insert(&g1.identity().to_bytes(), &n.to_be_bytes()));
+        let key = Key::new(g1.identity().to_bytes(), b"seq").unwrap();
+        let value = Value::new(n.to_be_bytes());
+        g1.create_transaction(Transaction::Insert(key, value));
         *n += 1;
         let state = g1.sync_state();
         //println!("{:?} -> {:?}", state.1, g2.sync_state().1);
@@ -194,8 +196,9 @@ mod tests {
     }
 
     fn check_key(g: &HashGraph, author: &Author, value: u64) {
+        let key = Key::new(author.to_bytes(), b"seq").unwrap();
         assert_eq!(
-            g.state_tree().get(&author.to_bytes()).unwrap(),
+            g.state_tree().get(&key).unwrap(),
             Some(value.to_be_bytes().to_vec().into()),
         );
     }

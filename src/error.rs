@@ -15,6 +15,8 @@ pub enum Error {
     InvalidEvent,
     #[error("Invalid sync")]
     InvalidSync,
+    #[error("Invalid key")]
+    InvalidKey,
 
     #[error("Config directory was not found")]
     ConfigDir,

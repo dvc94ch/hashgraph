@@ -250,7 +250,7 @@ impl<T> Graph<T> {
             .iter()
             .map(|author| {
                 self.decendants(y)
-                    .filter(|ancestor| ancestor.author() == *author)
+                    .filter(|ancestor| ancestor.author() == author)
                     .map(|ancestor| ancestor.seq())
                     .min()
             })
@@ -259,7 +259,7 @@ impl<T> Graph<T> {
             .iter()
             .map(|author| {
                 self.ancestors(x)
-                    .filter(|ancestor| ancestor.author() == *author)
+                    .filter(|ancestor| ancestor.author() == author)
                     .map(|ancestor| ancestor.seq())
                     .max()
             })

@@ -170,8 +170,8 @@ impl<T> Event<T> {
     }
 
     /// Author of the event.
-    pub fn author(&self) -> Author {
-        self.raw.event.author
+    pub fn author(&self) -> &Author {
+        &self.raw.event.author
     }
 
     /// Hash of the event.

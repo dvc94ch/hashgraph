@@ -1,6 +1,7 @@
 mod acl;
 mod chain;
 mod checkpoint;
+mod key;
 mod serde;
 mod tree;
 
@@ -8,6 +9,7 @@ use self::acl::Acl;
 use self::chain::AuthorChain;
 use self::checkpoint::ProposedCheckpoint;
 pub use self::checkpoint::{Checkpoint, SignedCheckpoint};
+pub use self::key::*;
 use self::serde::{Exporter, Importer};
 pub use self::tree::Tree;
 use crate::author::{Author, Identity, Signature};
@@ -19,50 +21,15 @@ use std::collections::HashSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Transaction {
-    AddAuthor(Box<[u8]>, u64),
-    RemAuthor(Box<[u8]>, u64),
-    SignBlock(Box<[u8]>),
-    Insert(Box<[u8]>, Box<[u8]>),
-    Remove(Box<[u8]>),
-    CompareAndSwap(Box<[u8]>, Option<Box<[u8]>>, Option<Box<[u8]>>),
-    SignCheckpoint(Box<[u8]>),
-}
-
-impl Transaction {
-    pub fn add_author(author: Author, block: u64) -> Self {
-        Self::AddAuthor(author.as_bytes().to_vec().into_boxed_slice(), block)
-    }
-
-    pub fn rem_author(author: Author, block: u64) -> Self {
-        Self::RemAuthor(author.as_bytes().to_vec().into_boxed_slice(), block)
-    }
-
-    pub fn sign_block(sig: &Signature) -> Self {
-        Self::SignBlock(sig.to_bytes().to_vec().into_boxed_slice())
-    }
-
-    pub fn insert(key: &[u8], value: &[u8]) -> Self {
-        Self::Insert(
-            key.to_vec().into_boxed_slice(),
-            value.to_vec().into_boxed_slice(),
-        )
-    }
-
-    pub fn remove(key: &[u8]) -> Self {
-        Self::Remove(key.to_vec().into_boxed_slice())
-    }
-
-    pub fn compare_and_swap(key: &[u8], old: Option<&[u8]>, new: Option<&[u8]>) -> Self {
-        Self::CompareAndSwap(
-            key.to_vec().into_boxed_slice(),
-            old.map(|old| old.to_vec().into_boxed_slice()),
-            new.map(|new| new.to_vec().into_boxed_slice()),
-        )
-    }
-
-    pub fn sign_checkpoint(sig: &Signature) -> Self {
-        Self::SignCheckpoint(sig.to_bytes().to_vec().into_boxed_slice())
-    }
+    AddAuthor(Author, u64),
+    RemAuthor(Author, u64),
+    SignBlock(Signature),
+    Insert(Key, Value),
+    Remove(Key),
+    AddAuthorToPrefix(Value, Author),
+    RemAuthorFromPrefix(Value, Author),
+    CompareAndSwap(Key, Option<Value>, Option<Value>),
+    SignCheckpoint(Signature),
 }
 
 pub struct State {
@@ -99,34 +66,24 @@ impl State {
         self.state.tree()
     }
 
-    pub fn commit(&mut self, author: Author, op: &Transaction) -> Result<(), Error> {
+    pub fn commit(&mut self, author: &Author, op: &Transaction) -> Result<(), Error> {
         match op {
-            Transaction::AddAuthor(author, block) => {
-                let author = Author::from_bytes(author)?;
-                self.authors.add_author(author, *block);
-            }
-            Transaction::RemAuthor(author, block) => {
-                let author = Author::from_bytes(author)?;
-                self.authors.rem_author(author, *block);
-            }
-            Transaction::SignBlock(signature) => {
-                let signature = Signature::from_bytes(signature)?;
-                self.authors.sign_block(author, signature);
-            }
+            Transaction::AddAuthor(author, block) => self.authors.add_author(*author, *block),
+            Transaction::RemAuthor(author, block) => self.authors.rem_author(*author, *block),
+            Transaction::SignBlock(signature) => self.authors.sign_block(*author, *signature),
             Transaction::Insert(key, value) => self.state.insert(author, key, value)?,
             Transaction::Remove(key) => self.state.remove(author, key)?,
             Transaction::CompareAndSwap(key, old, new) => {
-                self.state.compare_and_swap(
-                    author,
-                    key,
-                    old.as_ref().map(|b| &**b),
-                    new.as_ref().map(|b| &**b),
-                )?;
+                self.state
+                    .compare_and_swap(author, key, old.as_ref(), new.as_ref())?;
             }
-            Transaction::SignCheckpoint(signature) => {
-                let signature = Signature::from_bytes(signature)?;
-                self.sign_checkpoint(author, signature)
+            Transaction::AddAuthorToPrefix(prefix, new) => {
+                self.state.add_author_to_prefix(author, prefix.as_ref(), *new)?;
             }
+            Transaction::RemAuthorFromPrefix(prefix, rm) => {
+                self.state.remove_author_from_prefix(author, prefix.as_ref(), *rm)?;
+            }
+            Transaction::SignCheckpoint(signature) => self.sign_checkpoint(*author, *signature),
         }
         Ok(())
     }
@@ -136,9 +93,9 @@ impl State {
     }
 
     pub fn sign_block(&self, identity: &Identity) -> Transaction {
-        Transaction::sign_block(
-            &identity.sign(&*self.authors.hash().expect("proposed block exists")),
-        )
+        let block_hash = self.authors.hash().expect("proposed block exists");
+        let signature = identity.sign(&*block_hash);
+        Transaction::SignBlock(signature)
     }
 
     pub async fn export_checkpoint(&mut self, dir: &Path) -> Result<Checkpoint, Error> {
@@ -259,10 +216,12 @@ mod tests {
         let path: &Path = tmpdir.path().into();
         let mut state = State::open(path).unwrap();
         state.genesis(set(&ids)).unwrap();
-        state.commit(ids[0].author(), &Transaction::insert(b"key", b"value")).unwrap();
-        assert_eq!(state.state_tree().len(), 1);
-        let value = state.state_tree().get(b"key").unwrap().unwrap();
-        assert_eq!(&value, &b"value"[..]);
+        let key = Key::new(b"prefix", b"key").unwrap();
+        let value = Value::new(b"value");
+        let tx = Transaction::Insert(key.clone(), value.clone());
+        state.commit(&ids[0].author(), &tx).unwrap();
+        let value = state.state_tree().get(&key).unwrap();
+        assert_eq!(value.as_ref().map(|v| v.as_ref()), Some(&b"value"[..]));
     }
 
     #[test]
@@ -278,14 +237,14 @@ mod tests {
         assert_eq!(authors.len(), 2);
         state
             .commit(
-                ids[0].author(),
-                &Transaction::add_author(ids[2].author(), 1),
+                &ids[0].author(),
+                &Transaction::AddAuthor(ids[2].author(), 1),
             )
             .unwrap();
         state
             .commit(
-                ids[0].author(),
-                &Transaction::rem_author(ids[0].author(), 1),
+                &ids[0].author(),
+                &Transaction::RemAuthor(ids[0].author(), 1),
             )
             .unwrap();
 
@@ -293,7 +252,7 @@ mod tests {
         assert_eq!(block2, 1);
         assert_eq!(authors, authors2);
         state
-            .commit(ids[0].author(), &state.sign_block(&ids[0]))
+            .commit(&ids[0].author(), &state.sign_block(&ids[0]))
             .unwrap();
 
         let (block3, authors3) = state.start_round().unwrap();
@@ -312,9 +271,11 @@ mod tests {
 
         let dir = path.join("checkpoint");
         async_std::fs::create_dir_all(&dir).await.unwrap();
-        state
-            .commit(ids[0].author(), &Transaction::insert(b"key", b"value"))
-            .unwrap();
+
+        let key = Key::new(b"prefix", b"key").unwrap();
+        let value = Value::new(b"value");
+        let tx = Transaction::Insert(key.clone(), value.clone());
+        state.commit(&ids[0].author(), &tx).unwrap();
 
         let checkpoint = state.export_checkpoint(&dir).await.unwrap();
 

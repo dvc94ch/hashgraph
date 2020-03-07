@@ -306,17 +306,19 @@ impl<T> Voter<T> {
                     let mut timestamps = Vec::with_capacity(round.unique_famous_witnesses.len());
                     for witness in &round.unique_famous_witnesses {
                         let witness = self.graph.event(witness).unwrap();
-                        let timestamp = self.graph.self_ancestors(witness).find(|ancestor| {
-                            let next_ancestor = ancestor
-                                .self_parent()
-                                .map(|e| self.graph.event(e).unwrap());
-                            self.graph.ancestor(ancestor, event) &&
-                            next_ancestor
-                                .map(|ancestor| !self.graph.ancestor(ancestor, event))
-                                .unwrap_or(true)
-                        })
-                        .map(|e| e.time())
-                        .unwrap();
+                        let timestamp = self
+                            .graph
+                            .self_ancestors(witness)
+                            .find(|ancestor| {
+                                let next_ancestor =
+                                    ancestor.self_parent().map(|e| self.graph.event(e).unwrap());
+                                self.graph.ancestor(ancestor, event)
+                                    && next_ancestor
+                                        .map(|ancestor| !self.graph.ancestor(ancestor, event))
+                                        .unwrap_or(true)
+                            })
+                            .map(|e| e.time())
+                            .unwrap();
                         timestamps.push(*timestamp);
                     }
                     timestamps.sort();
@@ -333,7 +335,10 @@ impl<T> Voter<T> {
                 break;
             }
         }
-        let mut events = commit.into_iter().map(|h| self.graph.event(&h).unwrap()).collect::<Vec<_>>();
+        let mut events = commit
+            .into_iter()
+            .map(|h| self.graph.event(&h).unwrap())
+            .collect::<Vec<_>>();
         //println!("committing {} events", events.len());
         events.sort();
         events.into_iter().map(|e| *e.hash()).collect()

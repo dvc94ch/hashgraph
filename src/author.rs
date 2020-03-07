@@ -4,21 +4,36 @@ use async_std::fs::{File, Permissions};
 use async_std::path::Path;
 use async_std::{fs, prelude::*};
 use core::cmp::Ordering;
+use core::fmt::{Debug, Formatter, Result as FmtResult};
 use core::hash::{Hash, Hasher};
 use core::ops::Deref;
 use data_encoding::BASE32;
-pub use disco::ed25519::Signature;
-use disco::ed25519::{Keypair, PublicKey, SignatureError};
+use disco::ed25519::{Keypair, PublicKey, Signature as RawSignature, SignatureError};
 use rand::rngs::OsRng;
+use serde::de::Error as SerdeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Author(PublicKey);
 
-impl core::fmt::Debug for Author {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl Debug for Author {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
         write!(f, "{}", BASE32.encode(self.as_bytes()))
+    }
+}
+
+impl Serialize for Author {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(self.as_bytes())
+    }
+}
+
+impl<'de> Deserialize<'de> for Author {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes: &[u8] = Deserialize::deserialize(deserializer)?;
+        Self::from_bytes(bytes).map_err(SerdeError::custom)
     }
 }
 
@@ -54,6 +69,60 @@ impl Author {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct Signature(RawSignature);
+
+impl Debug for Signature {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        write!(f, "{}", BASE32.encode(&self.to_bytes()))
+    }
+}
+
+impl Serialize for Signature {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&self.to_bytes())
+    }
+}
+
+impl<'de> Deserialize<'de> for Signature {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes: &[u8] = Deserialize::deserialize(deserializer)?;
+        Self::from_bytes(bytes).map_err(SerdeError::custom)
+    }
+}
+
+impl Deref for Signature {
+    type Target = RawSignature;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl PartialOrd for Signature {
+    fn partial_cmp(&self, other: &Signature) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Signature {
+    fn cmp(&self, other: &Signature) -> Ordering {
+        self.to_bytes().cmp(&other.to_bytes())
+    }
+}
+
+impl Hash for Signature {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.to_bytes().hash(h);
+    }
+}
+
+impl Signature {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SignatureError> {
+        Ok(Self(RawSignature::from_bytes(bytes)?))
+    }
+}
+
 #[derive(Debug)]
 pub struct Identity(Keypair);
 
@@ -63,7 +132,7 @@ impl Identity {
     }
 
     pub fn sign(&self, msg: &[u8]) -> Signature {
-        self.0.sign(msg)
+        Signature(self.0.sign(msg))
     }
 
     pub fn author(&self) -> Author {
