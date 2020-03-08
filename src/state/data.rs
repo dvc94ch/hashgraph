@@ -4,11 +4,11 @@ use crate::author::Author;
 use crate::error::Error;
 use sled::CompareAndSwapError;
 
-pub struct Acl {
+pub struct Data {
     pub(crate) tree: sled::Tree,
 }
 
-impl Acl {
+impl Data {
     pub fn from_tree(tree: sled::Tree) -> Self {
         Self { tree }
     }
@@ -152,12 +152,12 @@ mod tests {
     use async_std::path::Path;
     use tempdir::TempDir;
 
-    fn setup() -> (TempDir, Acl, Tree) {
+    fn setup() -> (TempDir, Data, Tree) {
         let tmpdir = TempDir::new("test_commit").unwrap();
         let path: &Path = tmpdir.path().into();
         let db = sled::open(path).unwrap();
         let tree = db.open_tree("state").unwrap();
-        let state = Acl::from_tree(tree);
+        let state = Data::from_tree(tree);
         let tree = state.tree();
         (tmpdir, state, tree)
     }

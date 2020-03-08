@@ -1,25 +1,25 @@
-mod acl;
 mod chain;
 mod checkpoint;
+mod data;
 mod transaction;
 mod tree;
 
-use self::acl::Acl;
-use self::chain::AuthorChain;
-use self::checkpoint::ProposedCheckpoint;
-pub use self::checkpoint::{Checkpoint, SignedCheckpoint};
-pub use self::transaction::*;
-pub use self::tree::{Exporter, Importer, Tree};
 use crate::author::{Author, Identity, Signature};
 use crate::error::Error;
 use crate::hash::{FileHasher, Hash};
 use async_std::path::Path;
+use chain::AuthorChain;
+use checkpoint::ProposedCheckpoint;
+pub use checkpoint::{Checkpoint, SignedCheckpoint};
+use data::Data;
 use std::collections::HashSet;
+pub use transaction::*;
+pub use tree::{Exporter, Importer, Tree};
 
 pub struct State {
     db: sled::Db,
     authors: AuthorChain,
-    state: Acl,
+    data: Data,
     checkpoint: Option<SignedCheckpoint>,
     proposed: Option<ProposedCheckpoint>,
 }
@@ -28,11 +28,11 @@ impl State {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let db = sled::open(path.join("sled"))?;
         let authors = AuthorChain::from_tree(db.open_tree("authors")?)?;
-        let state = Acl::from_tree(db.open_tree("state")?);
+        let data = Data::from_tree(db.open_tree("data")?);
         Ok(Self {
             db,
             authors,
-            state,
+            data,
             checkpoint: None,
             proposed: None,
         })
@@ -46,8 +46,8 @@ impl State {
         self.authors.genesis_hash()
     }
 
-    pub fn state_tree(&self) -> Tree {
-        self.state.tree()
+    pub fn tree(&self) -> Tree {
+        self.data.tree()
     }
 
     pub fn commit(&mut self, author: &Author, op: &Transaction) -> Result<(), Error> {
@@ -55,18 +55,18 @@ impl State {
             Transaction::AddAuthor(author, block) => Ok(self.authors.add_author(*author, *block)),
             Transaction::RemAuthor(author, block) => Ok(self.authors.rem_author(*author, *block)),
             Transaction::SignBlock(signature) => Ok(self.authors.sign_block(*author, *signature)),
-            Transaction::Insert(key, value) => self.state.insert(author, key, value)?,
-            Transaction::Remove(key) => self.state.remove(author, key)?,
+            Transaction::Insert(key, value) => self.data.insert(author, key, value)?,
+            Transaction::Remove(key) => self.data.remove(author, key)?,
             Transaction::CompareAndSwap(key, old, new) => {
-                self.state
+                self.data
                     .compare_and_swap(author, key, old.as_ref(), new.as_ref())?
             }
             Transaction::AddAuthorToPrefix(prefix, new) => {
-                self.state
+                self.data
                     .add_author_to_prefix(author, prefix.as_ref(), *new)?
             }
             Transaction::RemAuthorFromPrefix(prefix, rm) => {
-                self.state
+                self.data
                     .remove_author_from_prefix(author, prefix.as_ref(), *rm)?
             }
             Transaction::SignCheckpoint(signature) => Ok(self.sign_checkpoint(*author, *signature)),
@@ -89,9 +89,7 @@ impl State {
         Exporter::new(&self.authors.tree, &mut fh)
             .write_tree()
             .await?;
-        Exporter::new(&self.state.tree, &mut fh)
-            .write_tree()
-            .await?;
+        Exporter::new(&self.data.tree, &mut fh).write_tree().await?;
         let checkpoint = Checkpoint(fh.rename(&dir).await?);
         self.proposed = Some(ProposedCheckpoint::new(checkpoint));
         Ok(checkpoint)
@@ -105,15 +103,15 @@ impl State {
         let genesis = self.genesis_hash().ok();
 
         self.authors.tree.clear()?;
-        self.state.tree.clear()?;
+        self.data.tree.clear()?;
         let mut fh = FileHasher::open_with_hash(dir, &*checkpoint).await?;
         Importer::new(&self.authors.tree, &mut fh)
             .read_tree()
             .await?;
-        Importer::new(&self.state.tree, &mut fh).read_tree().await?;
+        Importer::new(&self.data.tree, &mut fh).read_tree().await?;
         if fh.hash() != *checkpoint {
             self.authors.tree.clear()?;
-            self.state.tree.clear()?;
+            self.data.tree.clear()?;
             return Err(Error::InvalidCheckpoint);
         }
 
@@ -206,7 +204,7 @@ mod tests {
         let value = Value::new(b"value");
         let tx = Transaction::Insert(key.clone(), value.clone());
         state.commit(&ids[0].author(), &tx).unwrap();
-        let value = state.state_tree().get(&key).unwrap();
+        let value = state.tree().get(&key).unwrap();
         assert_eq!(value.as_ref().map(|v| v.as_ref()), Some(&b"value"[..]));
     }
 

@@ -115,8 +115,8 @@ impl HashGraph {
         Ok(hash)
     }
 
-    pub fn state_tree(&self) -> Tree {
-        self.state.state_tree()
+    pub fn tree(&self) -> Tree {
+        self.state.tree()
     }
 
     pub fn identity(&self) -> Author {
@@ -196,7 +196,7 @@ mod tests {
     fn check_key(g: &HashGraph, author: &Author, value: u64) {
         let key = Key::new(author.to_bytes(), b"seq").unwrap();
         assert_eq!(
-            g.state_tree().get(&key).unwrap(),
+            g.tree().get(&key).unwrap(),
             Some(value.to_be_bytes().to_vec().into()),
         );
     }
