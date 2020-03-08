@@ -2,7 +2,6 @@ mod acl;
 mod chain;
 mod checkpoint;
 mod key;
-mod serde;
 mod transaction;
 mod tree;
 
@@ -11,9 +10,8 @@ use self::chain::AuthorChain;
 use self::checkpoint::ProposedCheckpoint;
 pub use self::checkpoint::{Checkpoint, SignedCheckpoint};
 pub use self::key::*;
-use self::serde::{Exporter, Importer};
 pub use self::transaction::*;
-pub use self::tree::Tree;
+pub use self::tree::{Exporter, Importer, Tree};
 use crate::author::{Author, Identity, Signature};
 use crate::error::Error;
 use crate::hash::{FileHasher, Hash};

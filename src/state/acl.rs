@@ -142,7 +142,7 @@ impl Acl {
     }
 
     pub fn tree(&self) -> Tree {
-        Tree(self.tree.clone())
+        Tree::new(self.tree.clone())
     }
 }
 
