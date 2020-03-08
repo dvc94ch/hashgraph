@@ -1,7 +1,9 @@
 use super::key::{Key, Value};
+use super::transaction::{TransactionError, TransactionResult};
 use super::tree::Tree;
 use crate::author::Author;
 use crate::error::Error;
+use sled::CompareAndSwapError;
 
 pub struct Acl {
     pub(crate) tree: sled::Tree,
@@ -17,7 +19,7 @@ impl Acl {
         author: &Author,
         prefix: &[u8],
         new: Author,
-    ) -> Result<bool, Error> {
+    ) -> Result<TransactionResult, Error> {
         let mut authors = if let Some(value) = self.tree.get(&prefix)? {
             let authors: Vec<Author> = bincode::deserialize(&value)?;
             authors
@@ -36,15 +38,15 @@ impl Acl {
                 }
             }
             if !has_permission {
-                return Ok(false);
+                return Ok(Err(TransactionError::Permission));
             }
             if contains_author {
-                return Ok(true);
+                return Ok(Ok(()));
             }
         }
         authors.push(new);
         self.tree.insert(prefix, bincode::serialize(&authors)?)?;
-        Ok(true)
+        Ok(Ok(()))
     }
 
     pub fn remove_author_from_prefix(
@@ -52,7 +54,7 @@ impl Acl {
         author: &Author,
         prefix: &[u8],
         rm: Author,
-    ) -> Result<bool, Error> {
+    ) -> Result<TransactionResult, Error> {
         let authors = if let Some(value) = self.tree.get(&prefix)? {
             let authors: Vec<Author> = bincode::deserialize(&value)?;
             authors
@@ -73,10 +75,10 @@ impl Acl {
             }
         }
         if !has_permission {
-            return Ok(false);
+            return Ok(Err(TransactionError::Permission));
         }
         if !contains_author {
-            return Ok(true);
+            return Ok(Ok(()));
         }
         if new_authors.is_empty() {
             self.tree.remove(prefix)?;
@@ -84,21 +86,32 @@ impl Acl {
             self.tree
                 .insert(prefix, bincode::serialize(&new_authors)?)?;
         }
-        Ok(true)
+        Ok(Ok(()))
     }
 
-    pub fn insert(&self, author: &Author, key: &Key, value: &Value) -> Result<(), Error> {
-        if self.add_author_to_prefix(author, key.prefix(), *author)? {
-            self.tree.insert(&key, value.as_ref())?;
+    pub fn insert(
+        &self,
+        author: &Author,
+        key: &Key,
+        value: &Value,
+    ) -> Result<TransactionResult, Error> {
+        match self.add_author_to_prefix(author, key.prefix(), *author)? {
+            Ok(()) => {
+                self.tree.insert(&key, value.as_ref())?;
+                Ok(Ok(()))
+            }
+            Err(err) => Ok(Err(err)),
         }
-        Ok(())
     }
 
-    pub fn remove(&self, author: &Author, key: &Key) -> Result<(), Error> {
-        if self.add_author_to_prefix(author, key.prefix(), *author)? {
-            self.tree.remove(&key)?;
+    pub fn remove(&self, author: &Author, key: &Key) -> Result<TransactionResult, Error> {
+        match self.add_author_to_prefix(author, key.prefix(), *author)? {
+            Ok(()) => {
+                self.tree.remove(&key)?;
+                Ok(Ok(()))
+            }
+            Err(err) => Ok(Err(err)),
         }
-        Ok(())
     }
 
     pub fn compare_and_swap(
@@ -107,13 +120,25 @@ impl Acl {
         key: &Key,
         old: Option<&Value>,
         new: Option<&Value>,
-    ) -> Result<(), Error> {
-        if self.add_author_to_prefix(author, key.prefix(), *author)? {
-            self.tree
-                .compare_and_swap(key, old.map(|v| v.as_ref()), new.map(|v| v.as_ref()))?
-                .ok();
+    ) -> Result<TransactionResult, Error> {
+        match self.add_author_to_prefix(author, key.prefix(), *author)? {
+            Ok(()) => {
+                match self.tree.compare_and_swap(
+                    key,
+                    old.map(|v| v.as_ref()),
+                    new.map(|v| v.as_ref()),
+                )? {
+                    Ok(()) => Ok(Ok(())),
+                    Err(CompareAndSwapError { current, proposed }) => {
+                        Ok(Err(TransactionError::CompareAndSwap {
+                            current: current.map(Value::new),
+                            proposed: proposed.map(Value::new),
+                        }))
+                    }
+                }
+            }
+            Err(err) => Ok(Err(err)),
         }
-        Ok(())
     }
 
     pub fn tree(&self) -> Tree {
@@ -144,10 +169,10 @@ mod tests {
         let (_, state, tree) = setup();
         let key = Key::new(b"prefix", b"key").unwrap();
         let value = Value::new(b"value");
-        state.insert(&id.author(), &key, &value).unwrap();
+        state.insert(&id.author(), &key, &value).unwrap().unwrap();
         let value = tree.get(&key).unwrap();
         assert_eq!(value.as_ref().map(|v| v.as_ref()), Some(&b"value"[..]));
-        state.remove(&id.author(), &key).unwrap();
+        state.remove(&id.author(), &key).unwrap().unwrap();
         assert_eq!(tree.get(&key).unwrap(), None);
     }
 
@@ -160,15 +185,17 @@ mod tests {
         let v1 = Value::new(0u64.to_be_bytes());
         let v2 = Value::new(1u64.to_be_bytes());
 
-        state.insert(&id1.author(), &key, &v1).unwrap();
-        state.insert(&id2.author(), &key, &v2).unwrap();
+        state.insert(&id1.author(), &key, &v1).unwrap().unwrap();
+        let res = state.insert(&id2.author(), &key, &v2).unwrap();
+        assert_eq!(res, Err(TransactionError::Permission));
         let value = tree.get(&key).unwrap();
         assert_eq!(value.as_ref().map(|v| v.as_ref()), Some(v1.as_ref()));
 
         state
             .add_author_to_prefix(&id1.author(), b"prefix", id2.author())
+            .unwrap()
             .unwrap();
-        state.insert(&id2.author(), &key, &v2).unwrap();
+        state.insert(&id2.author(), &key, &v2).unwrap().unwrap();
         let value = tree.get(&key).unwrap();
         assert_eq!(value.as_ref().map(|v| v.as_ref()), Some(v2.as_ref()));
     }

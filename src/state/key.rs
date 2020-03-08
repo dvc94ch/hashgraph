@@ -1,7 +1,7 @@
 use crate::error::Error;
 use serde::{de::Error as SerdeError, Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Key(Box<[u8]>);
 
 impl Key {
@@ -55,7 +55,7 @@ impl<'de> Deserialize<'de> for Key {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Value(Box<[u8]>);
 
 impl Value {
