@@ -1,7 +1,7 @@
 //! Gossip graph
+use super::event::{Event, RawEvent};
 use crate::author::Author;
 use crate::error::Error;
-use crate::event::{Event, RawEvent};
 use crate::hash::Hash;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -401,7 +401,7 @@ impl<T> Graph<T> {
 mod tests {
     use super::*;
     use crate::author::Identity;
-    use crate::event::{RawEvent, UnsignedRawEvent};
+    use crate::vote::event::UnsignedRawEvent;
     use std::time::SystemTime;
 
     fn raw_event(id: &Identity, self_hash: Option<Hash>, other_hash: Option<Hash>) -> RawEvent<()> {

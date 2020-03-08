@@ -4,7 +4,6 @@
 #![allow(dead_code)]
 mod author;
 mod error;
-mod event;
 mod hash;
 mod state;
 mod vote;
@@ -12,12 +11,11 @@ mod vote;
 pub use crate::author::Author;
 use crate::author::Identity;
 pub use crate::error::Error;
-use crate::event::UnsignedRawEvent;
-pub use crate::event::{Event, RawEvent};
 pub use crate::hash::Hash;
 use crate::state::State;
 pub use crate::state::{Key, SignedCheckpoint, Transaction, Tree, Value};
-use crate::vote::Voter;
+pub use crate::vote::RawEvent;
+use crate::vote::{UnsignedRawEvent, Voter};
 use async_std::fs;
 use async_std::path::{Path, PathBuf};
 use std::collections::HashSet;

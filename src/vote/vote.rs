@@ -1,7 +1,7 @@
 //! Implements voting and round handling.
+use super::event::RawEvent;
 use crate::author::Author;
 use crate::error::Error;
-use crate::event::RawEvent;
 use crate::hash::Hash;
 use crate::vote::graph::Graph;
 use serde::Serialize;
