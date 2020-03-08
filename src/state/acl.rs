@@ -1,5 +1,4 @@
-use super::key::{Key, Value};
-use super::transaction::{TransactionError, TransactionResult};
+use super::transaction::{Key, TransactionError, TransactionResult, Value};
 use super::tree::Tree;
 use crate::author::Author;
 use crate::error::Error;
