@@ -26,13 +26,6 @@ pub enum TransactionError {
 
 pub type TransactionResult = Result<(), TransactionError>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub enum TransactionStatus {
-    New(Transaction),
-    Created,
-    Commited(TransactionResult),
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Key(Box<[u8]>);
 

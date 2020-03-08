@@ -1,63 +1,121 @@
 //! Tree utils.
+use super::queue::{TransactionFuture, TransactionQueue};
+use super::transaction::{Key, Transaction, Value};
+use crate::author::Author;
 use crate::error::Error;
 use crate::hash::FileHasher;
 use async_std::prelude::*;
 use core::ops::RangeBounds;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug)]
-pub struct Tree(sled::Tree);
+pub struct Tree {
+    tree: sled::Tree,
+    queue: Arc<Mutex<TransactionQueue>>,
+}
 
 impl Tree {
-    pub fn new(tree: sled::Tree) -> Self {
-        Self(tree)
+    pub fn new(tree: sled::Tree, queue: Arc<Mutex<TransactionQueue>>) -> Self {
+        Self { tree, queue }
     }
 
     pub fn get<K: AsRef<[u8]>>(&self, key: K) -> sled::Result<Option<sled::IVec>> {
-        self.0.get(key)
+        self.tree.get(key)
     }
 
     pub fn watch_prefix<P: AsRef<[u8]>>(&self, prefix: P) -> sled::Subscriber {
-        self.0.watch_prefix(prefix)
+        self.tree.watch_prefix(prefix)
     }
 
     pub fn contains_key<K: AsRef<[u8]>>(&self, key: K) -> sled::Result<bool> {
-        self.0.contains_key(key)
+        self.tree.contains_key(key)
     }
 
     pub fn get_lt<K: AsRef<[u8]>>(&self, key: K) -> sled::Result<Option<(sled::IVec, sled::IVec)>> {
-        self.0.get_lt(key)
+        self.tree.get_lt(key)
     }
 
     pub fn get_gt<K: AsRef<[u8]>>(&self, key: K) -> sled::Result<Option<(sled::IVec, sled::IVec)>> {
-        self.0.get_gt(key)
+        self.tree.get_gt(key)
     }
 
     pub fn iter(&self) -> sled::Iter {
-        self.0.iter()
+        self.tree.iter()
     }
 
     pub fn range<K: AsRef<[u8]>, R: RangeBounds<K>>(&self, range: R) -> sled::Iter {
-        self.0.range(range)
+        self.tree.range(range)
     }
 
     pub fn scan_prefix<P: AsRef<[u8]>>(&self, prefix: P) -> sled::Iter {
-        self.0.scan_prefix(prefix)
+        self.tree.scan_prefix(prefix)
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.tree.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.tree.is_empty()
     }
 
     pub fn name(&self) -> sled::IVec {
-        self.0.name()
+        self.tree.name()
     }
 
     pub fn checksum(&self) -> sled::Result<u32> {
-        self.0.checksum()
+        self.tree.checksum()
+    }
+
+    pub fn insert<P: AsRef<[u8]>, K: AsRef<[u8]>, V: Into<Value>>(
+        &self,
+        prefix: P,
+        key: K,
+        value: V,
+    ) -> Result<TransactionFuture, Error> {
+        let key = Key::new(prefix, key)?;
+        let tx = Transaction::Insert(key, value.into());
+        Ok(self.queue.lock().unwrap().create_transaction(tx)?)
+    }
+
+    pub fn remove<P: AsRef<[u8]>, K: AsRef<[u8]>>(
+        &self,
+        prefix: P,
+        key: K,
+    ) -> Result<TransactionFuture, Error> {
+        let key = Key::new(prefix, key)?;
+        let tx = Transaction::Remove(key);
+        Ok(self.queue.lock().unwrap().create_transaction(tx)?)
+    }
+
+    pub fn compare_and_swap<P: AsRef<[u8]>, K: AsRef<[u8]>>(
+        &self,
+        prefix: P,
+        key: K,
+        old: Option<Value>,
+        new: Option<Value>,
+    ) -> Result<TransactionFuture, Error> {
+        let key = Key::new(prefix, key)?;
+        let tx = Transaction::CompareAndSwap(key, old, new);
+        Ok(self.queue.lock().unwrap().create_transaction(tx)?)
+    }
+
+    pub fn add_author_to_prefix<P: Into<Value>>(
+        &self,
+        prefix: P,
+        author: Author,
+    ) -> Result<TransactionFuture, Error> {
+        let tx = Transaction::AddAuthorToPrefix(prefix.into(), author);
+        Ok(self.queue.lock().unwrap().create_transaction(tx)?)
+    }
+
+    pub fn remove_author_from_prefix<P: Into<Value>>(
+        &self,
+        prefix: P,
+        author: Author,
+    ) -> Result<TransactionFuture, Error> {
+        let tx = Transaction::RemAuthorFromPrefix(prefix.into(), author);
+        Ok(self.queue.lock().unwrap().create_transaction(tx)?)
     }
 }
 

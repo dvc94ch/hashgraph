@@ -3,7 +3,7 @@ use async_std::fs::{self, File};
 use async_std::io::{Read, Result as IoResult, Write};
 use async_std::path::{Path, PathBuf};
 use async_std::task::{Context, Poll};
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
 use core::pin::Pin;
 use data_encoding::BASE32;
 use disco::symmetric::DiscoHash;
@@ -26,6 +26,12 @@ impl Deref for Hash {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl AsRef<[u8]> for Hash {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
@@ -55,23 +61,19 @@ impl Hasher {
         }
     }
 
+    pub fn write<T: AsRef<[u8]>>(&mut self, value: T) {
+        self.hasher.write(value.as_ref());
+    }
+
     pub fn sum(self) -> Hash {
         let bytes = self.hasher.sum();
         Hash::from_bytes(&bytes)
     }
-}
 
-impl Deref for Hasher {
-    type Target = DiscoHash;
-
-    fn deref(&self) -> &Self::Target {
-        &self.hasher
-    }
-}
-
-impl DerefMut for Hasher {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.hasher
+    pub fn digest<T: AsRef<[u8]>>(value: T) -> Hash {
+        let mut hasher = Self::new();
+        hasher.write(value);
+        hasher.sum()
     }
 }
 

@@ -1,6 +1,7 @@
 mod chain;
 mod checkpoint;
-mod data;
+mod queue;
+mod state_machine;
 mod transaction;
 mod tree;
 
@@ -11,15 +12,20 @@ use async_std::path::Path;
 use chain::AuthorChain;
 use checkpoint::ProposedCheckpoint;
 pub use checkpoint::{Checkpoint, SignedCheckpoint};
-use data::Data;
+use queue::TransactionQueue;
+use state_machine::StateMachine;
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 pub use transaction::*;
 pub use tree::{Exporter, Importer, Tree};
 
 pub struct State {
     db: sled::Db,
-    authors: AuthorChain,
-    data: Data,
+    authors: sled::Tree,
+    state: sled::Tree,
+    chain: AuthorChain,
+    state_machine: StateMachine,
+    queue: Arc<Mutex<TransactionQueue>>,
     checkpoint: Option<SignedCheckpoint>,
     proposed: Option<ProposedCheckpoint>,
 }
@@ -27,69 +33,75 @@ pub struct State {
 impl State {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let db = sled::open(path.join("sled"))?;
-        let authors = AuthorChain::from_tree(db.open_tree("authors")?)?;
-        let data = Data::from_tree(db.open_tree("data")?);
+        let authors = db.open_tree("authors")?;
+        let state = db.open_tree("state")?;
+        let chain = AuthorChain::from_tree(authors.clone())?;
+        let state_machine = StateMachine::from_tree(state.clone());
         Ok(Self {
             db,
             authors,
-            data,
+            state,
+            chain,
+            state_machine,
+            queue: Default::default(),
             checkpoint: None,
             proposed: None,
         })
     }
 
     pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), Error> {
-        self.authors.genesis(genesis_authors)
+        self.chain.genesis(genesis_authors)
     }
 
     pub fn genesis_hash(&self) -> Result<Hash, Error> {
-        self.authors.genesis_hash()
+        self.chain.genesis_hash()
     }
 
     pub fn tree(&self) -> Tree {
-        self.data.tree()
+        Tree::new(self.state.clone(), self.queue.clone())
     }
 
-    pub fn commit(&mut self, author: &Author, op: &Transaction) -> Result<(), Error> {
-        let _result = match op {
-            Transaction::AddAuthor(author, block) => Ok(self.authors.add_author(*author, *block)),
-            Transaction::RemAuthor(author, block) => Ok(self.authors.rem_author(*author, *block)),
-            Transaction::SignBlock(signature) => Ok(self.authors.sign_block(*author, *signature)),
-            Transaction::Insert(key, value) => self.data.insert(author, key, value)?,
-            Transaction::Remove(key) => self.data.remove(author, key)?,
+    pub fn create_payload(&self) -> Box<[Transaction]> {
+        self.queue.lock().unwrap().create_payload()
+    }
+
+    pub fn commit(&mut self, author: &Author, tx: &Transaction) -> Result<(), Error> {
+        let result = match tx {
+            Transaction::AddAuthor(author, block) => Ok(self.chain.add_author(*author, *block)),
+            Transaction::RemAuthor(author, block) => Ok(self.chain.rem_author(*author, *block)),
+            Transaction::SignBlock(signature) => Ok(self.chain.sign_block(*author, *signature)),
+            Transaction::Insert(key, value) => self.state_machine.insert(author, key, value)?,
+            Transaction::Remove(key) => self.state_machine.remove(author, key)?,
             Transaction::CompareAndSwap(key, old, new) => {
-                self.data
+                self.state_machine
                     .compare_and_swap(author, key, old.as_ref(), new.as_ref())?
             }
-            Transaction::AddAuthorToPrefix(prefix, new) => {
-                self.data
-                    .add_author_to_prefix(author, prefix.as_ref(), *new)?
-            }
-            Transaction::RemAuthorFromPrefix(prefix, rm) => {
-                self.data
-                    .remove_author_from_prefix(author, prefix.as_ref(), *rm)?
-            }
+            Transaction::AddAuthorToPrefix(prefix, new) => self
+                .state_machine
+                .add_author_to_prefix(author, prefix.as_ref(), *new)?,
+            Transaction::RemAuthorFromPrefix(prefix, rm) => self
+                .state_machine
+                .remove_author_from_prefix(author, prefix.as_ref(), *rm)?,
             Transaction::SignCheckpoint(signature) => Ok(self.sign_checkpoint(*author, *signature)),
         };
+        self.queue.lock().unwrap().commit(tx, result)?;
         Ok(())
     }
 
     pub fn start_round(&mut self) -> Result<(u64, Box<[Author]>), Error> {
-        self.authors.start_round()
+        self.chain.start_round()
     }
 
     pub fn sign_block(&self, identity: &Identity) -> Transaction {
-        let block_hash = self.authors.hash().expect("proposed block exists");
+        let block_hash = self.chain.hash().expect("proposed block exists");
         let signature = identity.sign(&*block_hash);
         Transaction::SignBlock(signature)
     }
 
     pub async fn export_checkpoint(&mut self, dir: &Path) -> Result<Checkpoint, Error> {
         let mut fh = FileHasher::create_tmp(&dir).await?;
-        Exporter::new(&self.authors.tree, &mut fh)
-            .write_tree()
-            .await?;
-        Exporter::new(&self.data.tree, &mut fh).write_tree().await?;
+        Exporter::new(&self.authors, &mut fh).write_tree().await?;
+        Exporter::new(&self.state, &mut fh).write_tree().await?;
         let checkpoint = Checkpoint(fh.rename(&dir).await?);
         self.proposed = Some(ProposedCheckpoint::new(checkpoint));
         Ok(checkpoint)
@@ -102,34 +114,32 @@ impl State {
     ) -> Result<(), Error> {
         let genesis = self.genesis_hash().ok();
 
-        self.authors.tree.clear()?;
-        self.data.tree.clear()?;
+        self.authors.clear()?;
+        self.state.clear()?;
         let mut fh = FileHasher::open_with_hash(dir, &*checkpoint).await?;
-        Importer::new(&self.authors.tree, &mut fh)
-            .read_tree()
-            .await?;
-        Importer::new(&self.data.tree, &mut fh).read_tree().await?;
+        Importer::new(&self.authors, &mut fh).read_tree().await?;
+        Importer::new(&self.state, &mut fh).read_tree().await?;
         if fh.hash() != *checkpoint {
-            self.authors.tree.clear()?;
-            self.data.tree.clear()?;
+            self.authors.clear()?;
+            self.state.clear()?;
             return Err(Error::InvalidCheckpoint);
         }
 
         // make sure that it's still the same chain by comparing the new genesis hash.
-        let new_authors = AuthorChain::from_tree(self.authors.tree.clone())?;
+        let chain = AuthorChain::from_tree(self.authors.clone())?;
         if let Some(genesis) = genesis {
-            let new_genesis = new_authors.genesis_hash()?;
+            let new_genesis = chain.genesis_hash()?;
             if genesis != new_genesis {
                 return Err(Error::InvalidCheckpoint);
             }
         }
 
         // check the signatures
-        let population = new_authors.authors.len();
+        let population = chain.authors.len();
         let threshold = population - population * 2 / 3;
         let mut signees = HashSet::new();
         for sig in &checkpoint.signatures[..] {
-            for author in new_authors.authors.iter() {
+            for author in chain.authors.iter() {
                 if signees.contains(author) {
                     continue;
                 }
@@ -143,7 +153,7 @@ impl State {
             return Err(Error::InvalidCheckpoint);
         }
 
-        self.authors = new_authors;
+        self.chain = chain;
         self.checkpoint = Some(checkpoint);
         Ok(())
     }
@@ -155,7 +165,7 @@ impl State {
     fn sign_checkpoint(&mut self, author: Author, sig: Signature) {
         if let Some(mut proposed) = self.proposed.take() {
             proposed.add_sig(author, sig);
-            let population = self.authors.authors.len();
+            let population = self.chain.authors.len();
             let threshold = population - population * 2 / 3;
             if proposed.len() >= threshold {
                 self.checkpoint = Some(proposed.into_signed_checkpoint());
@@ -193,19 +203,23 @@ mod tests {
         set
     }
 
-    #[test]
-    fn test_insert() {
+    #[async_std::test]
+    async fn test_insert() {
         let ids = gen_ids(1);
         let tmpdir = TempDir::new("test_insert").unwrap();
         let path: &Path = tmpdir.path().into();
         let mut state = State::open(path).unwrap();
         state.genesis(set(&ids)).unwrap();
-        let key = Key::new(b"prefix", b"key").unwrap();
-        let value = Value::new(b"value");
-        let tx = Transaction::Insert(key.clone(), value.clone());
-        state.commit(&ids[0].author(), &tx).unwrap();
-        let value = state.tree().get(&key).unwrap();
+        let tree = state.tree();
+        let fut = tree.insert(b"prefix", b"key", Value::new("value")).unwrap();
+        let txs = state.create_payload();
+        for tx in txs.iter() {
+            println!("{:?}", tx);
+            state.commit(&ids[0].author(), &tx).unwrap();
+        }
+        let value = tree.get(Key::new(b"prefix", b"key").unwrap()).unwrap();
         assert_eq!(value.as_ref().map(|v| v.as_ref()), Some(&b"value"[..]));
+        assert!(fut.await.is_ok());
     }
 
     #[test]

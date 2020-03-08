@@ -1,16 +1,13 @@
 use super::transaction::{Key, TransactionError, TransactionResult, Value};
-use super::tree::Tree;
 use crate::author::Author;
 use crate::error::Error;
 use sled::CompareAndSwapError;
 
-pub struct Data {
-    pub(crate) tree: sled::Tree,
-}
+pub struct StateMachine(sled::Tree);
 
-impl Data {
+impl StateMachine {
     pub fn from_tree(tree: sled::Tree) -> Self {
-        Self { tree }
+        Self(tree)
     }
 
     pub fn add_author_to_prefix(
@@ -19,7 +16,7 @@ impl Data {
         prefix: &[u8],
         new: Author,
     ) -> Result<TransactionResult, Error> {
-        let mut authors = if let Some(value) = self.tree.get(&prefix)? {
+        let mut authors = if let Some(value) = self.0.get(&prefix)? {
             let authors: Vec<Author> = bincode::deserialize(&value)?;
             authors
         } else {
@@ -44,7 +41,7 @@ impl Data {
             }
         }
         authors.push(new);
-        self.tree.insert(prefix, bincode::serialize(&authors)?)?;
+        self.0.insert(prefix, bincode::serialize(&authors)?)?;
         Ok(Ok(()))
     }
 
@@ -54,7 +51,7 @@ impl Data {
         prefix: &[u8],
         rm: Author,
     ) -> Result<TransactionResult, Error> {
-        let authors = if let Some(value) = self.tree.get(&prefix)? {
+        let authors = if let Some(value) = self.0.get(&prefix)? {
             let authors: Vec<Author> = bincode::deserialize(&value)?;
             authors
         } else {
@@ -80,10 +77,9 @@ impl Data {
             return Ok(Ok(()));
         }
         if new_authors.is_empty() {
-            self.tree.remove(prefix)?;
+            self.0.remove(prefix)?;
         } else {
-            self.tree
-                .insert(prefix, bincode::serialize(&new_authors)?)?;
+            self.0.insert(prefix, bincode::serialize(&new_authors)?)?;
         }
         Ok(Ok(()))
     }
@@ -96,7 +92,7 @@ impl Data {
     ) -> Result<TransactionResult, Error> {
         match self.add_author_to_prefix(author, key.prefix(), *author)? {
             Ok(()) => {
-                self.tree.insert(&key, value.as_ref())?;
+                self.0.insert(&key, value.as_ref())?;
                 Ok(Ok(()))
             }
             Err(err) => Ok(Err(err)),
@@ -106,7 +102,7 @@ impl Data {
     pub fn remove(&self, author: &Author, key: &Key) -> Result<TransactionResult, Error> {
         match self.add_author_to_prefix(author, key.prefix(), *author)? {
             Ok(()) => {
-                self.tree.remove(&key)?;
+                self.0.remove(&key)?;
                 Ok(Ok(()))
             }
             Err(err) => Ok(Err(err)),
@@ -122,7 +118,7 @@ impl Data {
     ) -> Result<TransactionResult, Error> {
         match self.add_author_to_prefix(author, key.prefix(), *author)? {
             Ok(()) => {
-                match self.tree.compare_and_swap(
+                match self.0.compare_and_swap(
                     key,
                     old.map(|v| v.as_ref()),
                     new.map(|v| v.as_ref()),
@@ -139,10 +135,6 @@ impl Data {
             Err(err) => Ok(Err(err)),
         }
     }
-
-    pub fn tree(&self) -> Tree {
-        Tree::new(self.tree.clone())
-    }
 }
 
 #[cfg(test)]
@@ -150,15 +142,15 @@ mod tests {
     use super::*;
     use crate::author::Identity;
     use async_std::path::Path;
+    use sled::Tree;
     use tempdir::TempDir;
 
-    fn setup() -> (TempDir, Data, Tree) {
+    fn setup() -> (TempDir, StateMachine, Tree) {
         let tmpdir = TempDir::new("test_commit").unwrap();
         let path: &Path = tmpdir.path().into();
         let db = sled::open(path).unwrap();
         let tree = db.open_tree("state").unwrap();
-        let state = Data::from_tree(tree);
-        let tree = state.tree();
+        let state = StateMachine::from_tree(tree.clone());
         (tmpdir, state, tree)
     }
 

@@ -25,7 +25,6 @@ pub struct HashGraph {
     voter: Voter<Transaction>,
     state: State,
     identity: Identity,
-    queue: Vec<Transaction>,
     self_hash: Option<Hash>,
     other_hash: Option<Hash>,
 }
@@ -46,7 +45,6 @@ impl HashGraph {
             identity,
             state,
             voter,
-            queue: Default::default(),
             self_hash: None,
             other_hash: None,
         })
@@ -54,10 +52,6 @@ impl HashGraph {
 
     pub fn genesis(&mut self, genesis_authors: HashSet<Author>) -> Result<(), Error> {
         self.state.genesis(genesis_authors)
-    }
-
-    pub fn create_transaction(&mut self, tx: Transaction) {
-        self.queue.push(tx);
     }
 
     pub fn sync_state(&self) -> (u64, Box<[Option<u64>]>) {
@@ -88,7 +82,7 @@ impl HashGraph {
         }
 
         // Create sync event.
-        let payload = std::mem::replace(&mut self.queue, Vec::new()).into_boxed_slice();
+        let payload = state.create_payload();
         let time = SystemTime::now();
         let (hash, event) = UnsignedRawEvent {
             self_hash: self.self_hash.take(),
@@ -167,9 +161,13 @@ mod tests {
         round: u64,
         witness: bool,
     ) -> Hash {
-        let key = Key::new(g1.identity().to_bytes(), b"seq").unwrap();
-        let value = Value::new(n.to_be_bytes());
-        g1.create_transaction(Transaction::Insert(key, value));
+        g1.tree()
+            .insert(
+                g1.identity().to_bytes(),
+                b"seq",
+                Value::new(n.to_be_bytes()),
+            )
+            .unwrap();
         *n += 1;
         let state = g1.sync_state();
         //println!("{:?} -> {:?}", state.1, g2.sync_state().1);
